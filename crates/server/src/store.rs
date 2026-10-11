@@ -1290,14 +1290,18 @@ pub async fn get_host(
     host_id: Uuid,
 ) -> anyhow::Result<Option<(HostSummary, Option<ClientReport>)>> {
     crate::pagination::query(pool,move |conn|Box::pin(async move{
+        // The summary and payload must describe the same report even when
+        // ingestion or deletion commits between these two reads.
+        let mut tx = sqlx::Connection::begin(conn).await?;
         let sql=format!("{HOST_SELECT} WHERE h.host_id=? AND h.lifecycle_status='active'");
-        let row:Option<HostRow>=sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(host_id).fetch_optional(&mut *conn).await?;
+        let row:Option<HostRow>=sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(host_id).fetch_optional(&mut *tx).await?;
         let Some(row)=row else{return Ok(None)};
-        let payload:Option<Vec<u8>>=sqlx::query_scalar("SELECT substr(CAST(r.payload AS BLOB),1,524289) FROM monitored_hosts h LEFT JOIN client_metric_reports r ON r.report_id=h.latest_report_id WHERE h.host_id=?").bind(host_id).fetch_one(&mut *conn).await?;
+        let payload:Option<Vec<u8>>=sqlx::query_scalar("SELECT substr(CAST(r.payload AS BLOB),1,524289) FROM monitored_hosts h LEFT JOIN client_metric_reports r ON r.report_id=h.latest_report_id WHERE h.host_id=?").bind(host_id).fetch_one(&mut *tx).await?;
         let mut host=summarize(row);
         let latest=payload.as_ref().and_then(|bytes|if bytes.len()<=524288 {serde_json::from_slice::<ClientReport>(bytes).ok()}else{None});
         let latest=latest.filter(|report|report.host.id==host.id&&crate::model::validate_report(report).is_ok());
         if payload.is_some()&&latest.is_none(){host.data_error=Some("stored_host_data_invalid");host.status="unavailable".into();}
+        tx.commit().await?;
         Ok(Some((host,latest)))
     })).await
 }

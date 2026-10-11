@@ -1200,3 +1200,73 @@ fn hardware_validation_rejects_old_protocol_and_invalid_readings() {
     value.system.hardware.as_mut().unwrap().sensors[0].kind = SensorKind::VoltageVolts;
     assert!(model::validate_report(&value).is_ok()); // negative rails are valid
 }
+
+#[tokio::test]
+async fn host_detail_keeps_summary_and_payload_in_one_ingestion_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let pool = store::open_or_initialize(&format!(
+        "sqlite://{}",
+        directory.path().join("detail-snapshot.db").display()
+    ))
+    .await
+    .unwrap();
+    let host_id = Uuid::new_v4();
+    let now = Utc::now();
+    let credential = token_hash("detail-snapshot-fixture");
+    sqlx::query("INSERT INTO monitored_hosts(host_id,name,os,arch,client_version,registered_at,last_seen_at,lifecycle_status) VALUES(?,'Snapshot','linux','x86_64','test',?,?,'active')")
+        .bind(host_id).bind(now).bind(now).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)")
+        .bind(Uuid::new_v4()).bind(host_id).bind(&credential).bind(now).execute(&pool).await.unwrap();
+    let base = now - Duration::hours(1);
+    let first = report(host_id, base);
+    store::store_report(
+        &pool,
+        &first,
+        &credential,
+        &model::validate_report(&first).unwrap(),
+    )
+    .await
+    .unwrap();
+    let writer_pool = pool.clone();
+    let writer = tokio::spawn(async move {
+        for index in 1..=500 {
+            let mut sample = report(host_id, base + Duration::seconds(index));
+            sample.system.cpu.usage_percent = (index % 100) as f64;
+            sample.system.cpu.per_core_percent = vec![sample.system.cpu.usage_percent];
+            let metrics = model::validate_report(&sample).unwrap();
+            store::store_report(&writer_pool, &sample, &credential, &metrics)
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    });
+    for _ in 0..500 {
+        let (summary, latest) = store::get_host(&pool, host_id).await.unwrap().unwrap();
+        let latest = latest.expect("initialized host always has a latest report");
+        assert_eq!(summary.latest_collected_at, Some(latest.collected_at));
+        assert_eq!(
+            summary.metrics.cpu_usage_percent,
+            Some(latest.system.cpu.usage_percent)
+        );
+    }
+    writer.await.unwrap();
+    assert!(
+        store::delete_host(&pool, host_id, "snapshot-test")
+            .await
+            .unwrap()
+    );
+    assert!(store::get_host(&pool, host_id).await.unwrap().is_none());
+    assert!(
+        store::get_host(&pool, Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        42
+    );
+}
