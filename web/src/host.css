@@ -52,3 +52,8 @@
   .host-device-details { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
   .host-device-details dd { margin-block-end: 0.6rem; }
 }
+
+/* Explicit Mac mini surfaces; the authored round radii remain the fallback before startup. */
+.host-history-toolbar { --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px); }
+.host-device-card:not(.host-device-card--plain) { --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px); }
+.host-device-card--plain { --xcss-server-corner-extent: 0px; }
