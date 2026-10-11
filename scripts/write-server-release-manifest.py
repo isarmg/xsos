@@ -15,7 +15,7 @@ from typing import NoReturn
 
 
 APPLICATION = "xsos"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 TARGET = "x86_64-unknown-linux-gnu"
 CONTRACT_FORMAT = "xsos-release-v1"
 SCHEMA_APPLICATION_VERSION = "1.0.0"
@@ -98,10 +98,10 @@ def read_identity(binary: Path) -> tuple[dict[str, object], bytes]:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        fail("usage: write-server-release-manifest.py /absolute/releases/1.0.0")
+        fail("usage: write-server-release-manifest.py /absolute/releases/1.0.1")
     root = Path(sys.argv[1])
     if not root.is_absolute() or root.name != VERSION or root.parent.name != "releases":
-        fail("root must be an absolute releases/1.0.0 directory")
+        fail("root must be an absolute releases/1.0.1 directory")
     if root.resolve(strict=True) != root:
         fail("release root must not traverse symbolic links")
     root_stat = root.lstat()

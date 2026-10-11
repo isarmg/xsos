@@ -121,7 +121,7 @@ class ReleaseToolingTests(unittest.TestCase):
                 destination.startswith(("https://", "#")),
                 f"packaged README link must work without the source tree: {destination}",
             )
-        self.assertIn("xsos 1.0.0 发行包部署手册", text)
+        self.assertIn("xsos 1.0.1 发行包部署手册", text)
         self.assertIn("bin/xsos", text)
         self.assertIn("systemd/xsos.service", text)
         self.assertIn("RELEASE-MANIFEST.json", text)

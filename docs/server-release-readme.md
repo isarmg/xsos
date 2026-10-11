@@ -1,4 +1,4 @@
-# xsos 1.0.0 发行包部署手册
+# xsos 1.0.1 发行包部署手册
 
 ## 安装与初始化
 
@@ -9,17 +9,17 @@
 
 ```sh
 set -eu
-sha256sum --check --strict xsos-1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check --strict xsos-1.0.1-x86_64-unknown-linux-gnu.tar.gz.sha256
 sudo test ! -e /opt/isarmg/xsos
 sudo test ! -e /etc/isarmg/xsos.env
 sudo test ! -e /etc/systemd/system/xsos.service
 sudo test ! -e /var/lib/isarmg/xsos
 sudo install -d -m 0755 -o root -g root /opt/isarmg /opt/isarmg/xsos /opt/isarmg/xsos/releases
-sudo tar -xzf xsos-1.0.0-x86_64-unknown-linux-gnu.tar.gz \
+sudo tar -xzf xsos-1.0.1-x86_64-unknown-linux-gnu.tar.gz \
   -C /opt/isarmg/xsos/releases --same-permissions --delay-directory-restore
-sudo chown -R root:root /opt/isarmg/xsos/releases/1.0.0
-sudo /opt/isarmg/xsos/releases/1.0.0/bin/xsos \
-  verify-release --root /opt/isarmg/xsos/releases/1.0.0
+sudo chown -R root:root /opt/isarmg/xsos/releases/1.0.1
+sudo /opt/isarmg/xsos/releases/1.0.1/bin/xsos \
+  verify-release --root /opt/isarmg/xsos/releases/1.0.1
 sudo groupadd --system xsos
 sudo useradd --system --gid xsos --home-dir /var/lib/isarmg/xsos \
   --no-create-home --shell /usr/sbin/nologin xsos
@@ -44,10 +44,10 @@ XSOC_AUTHORIZATION_KEY=REPLACE_WITH_BASE64_ENCODED_32_RANDOM_BYTES
 先初始化，再启动服务：
 
 ```sh
-sudo ln -sT /opt/isarmg/xsos/releases/1.0.0 /opt/isarmg/xsos/current
+sudo ln -sT /opt/isarmg/xsos/releases/1.0.1 /opt/isarmg/xsos/current
 sudo systemd-run --wait --collect -p User=xsos -p Group=xsos \
   -p EnvironmentFile=/etc/isarmg/xsos.env \
-  /opt/isarmg/xsos/releases/1.0.0/bin/xsos init
+  /opt/isarmg/xsos/releases/1.0.1/bin/xsos init
 sudo install -m 0644 -o root -g root \
   /opt/isarmg/xsos/current/systemd/xsos.service /etc/systemd/system/xsos.service
 sudo systemctl daemon-reload
@@ -78,20 +78,20 @@ curl --fail http://127.0.0.1:18105/readyz
 
 | 路径 | 用途 |
 |---|---|
-| `/opt/isarmg/xsos/releases/1.0.0/` | root 所有的只读发行目录 |
+| `/opt/isarmg/xsos/releases/1.0.1/` | root 所有的只读发行目录 |
 | `/opt/isarmg/xsos/current` | 指向该版本的绝对链接 |
 | `/etc/isarmg/xsos.env` | root 0600 配置，由 systemd 加载 |
 | `/var/lib/isarmg/xsos/db/xsos.sqlite3` | 服务账号所有的当前数据库 |
 | `/var/lib/isarmg/xsos/db/logs/` | 私有轮转运行日志 |
 
-归档的顶层是 `1.0.0/`，包含 `bin/xsos`、`systemd/xsos.service`、`web-assets.json`、`README.md` 和 `RELEASE-MANIFEST.json`。管理页面已内嵌到二进制。修改运行参数使用环境文件；发行目录保留下载时的内容与权限，供启动校验使用。
+归档的顶层是 `1.0.1/`，包含 `bin/xsos`、`systemd/xsos.service`、`web-assets.json`、`README.md` 和 `RELEASE-MANIFEST.json`。管理页面已内嵌到二进制。修改运行参数使用环境文件；发行目录保留下载时的内容与权限，供启动校验使用。
 
 `identity` 输出产品、版本、源码提交和结构身份；`verify-release` 核对完整文件树。SHA-256 用于核对下载完整性，仍需从可信发布页取得归档及校验文件。
 
 | 身份字段 | 当前值 |
 |---|---|
 | `application` | `xsos` |
-| `version` | `1.0.0` |
+| `version` | `1.0.1` |
 | `schema_revision` | `1` |
 | `target` | `x86_64-unknown-linux-gnu` |
 

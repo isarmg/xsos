@@ -125,7 +125,7 @@ jobs:
             exit 1
           fi
           cargo pkgid --locked -p xsos \
-            | grep -F '#xsos@1.0.0'
+            | grep -F '#xsos@1.0.1'
           cargo pkgid --locked -p xsos-protocol | grep -F '#xsos-protocol@1.0.0'
       - name: Install Node.js for embedded browser assets
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
