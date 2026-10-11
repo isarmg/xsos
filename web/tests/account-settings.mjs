@@ -89,7 +89,16 @@ try {
         await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
         const content = page.locator(".xcss-table-scroll:has(.xcss-statistics-table)");
         await expect(content).toBeVisible();
-        const contentColor = await paintedSurfaceColor(content);
+        // Theme attributes update before the renderer replaces its SVG paint.
+        // Resolve the current token independently, then wait for that exact color.
+        const contentColor = await page.evaluate(() => {
+          const probe = document.createElement("span");
+          probe.style.cssText = "display:none;color:var(--xcss-bg-panel)";
+          document.body.append(probe);
+          try { return getComputedStyle(probe).color; }
+          finally { probe.remove(); }
+        });
+        await expect.poll(() => paintedSurfaceColor(content)).toBe(contentColor);
         const before = await entryAppearance(entry);
         const account = page.getByRole("region", { name: "账号设置", exact: true });
         async function open() {
