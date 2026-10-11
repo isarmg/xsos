@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chromium, firefox, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { preview } from "vite";
+import { paintedSurfaceColor } from "./painted-surface.mjs";
 
 const token = "A".repeat(43), originalPassword = "correct-password", newPassword = "new-correct-password";
 const requestId = "fad86f79a625d937c7e2ac6de06110d1";
@@ -24,10 +25,9 @@ async function entryAppearance(entry) {
 }
 
 async function lightLogin(card) {
-  const colors = await card.evaluate(node => ({ background: getComputedStyle(node).backgroundColor,
-    text: [...node.querySelectorAll(".xcss-form-field > span,input,button")].map(element => getComputedStyle(element).color) }));
-  assert.equal(colors.background, "rgb(242, 242, 242)");
-  assert.ok(colors.text.every(color => color === "rgb(0, 0, 0)"));
+  await expect.poll(() => paintedSurfaceColor(card)).toBe("rgb(242, 242, 242)");
+  const text = await card.evaluate(node => [...node.querySelectorAll(".xcss-form-field > span,input,button")].map(element => getComputedStyle(element).color));
+  assert.ok(text.every(color => color === "rgb(0, 0, 0)"));
 }
 
 try {
@@ -89,7 +89,7 @@ try {
         await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
         const content = page.locator(".xcss-table-scroll:has(.xcss-statistics-table)");
         await expect(content).toBeVisible();
-        const contentColor = await content.evaluate(node => getComputedStyle(node).backgroundColor);
+        const contentColor = await paintedSurfaceColor(content);
         const before = await entryAppearance(entry);
         const account = page.getByRole("region", { name: "账号设置", exact: true });
         async function open() {
@@ -101,7 +101,7 @@ try {
           assert.deepEqual(await entryAppearance(entry), before);
           assert.equal(await entry.getAttribute("aria-pressed"), null);
           assert.equal(await entry.getAttribute("aria-current"), null);
-          assert.equal(await account.locator(".xcss-content-panel").evaluate(node => getComputedStyle(node).backgroundColor), contentColor);
+          await expect.poll(() => paintedSurfaceColor(account.locator(".xcss-content-panel"))).toBe(contentColor);
           await expect(page.locator('.xcss-header-navigation [aria-pressed="true"]')).toHaveCount(0);
         }
         await open();

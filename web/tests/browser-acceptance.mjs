@@ -2,6 +2,7 @@ import { rangeEditor, checkDateRangeValidation } from "./date-range.mjs";
 import { checkWebLanguage } from "./language.mjs";
 import "./pagination-contract.mjs";
 import { checkHeaderActions, checkHeaderLogout } from "./header-actions.mjs";
+import { paintedSurfaceColor } from "./painted-surface.mjs";
 import assert from "node:assert/strict";
 import { chromium, firefox, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -529,15 +530,15 @@ try {
       await expect(page.getByRole("button", { name: "24h", exact: true })).toHaveAttribute("aria-pressed", "true");
       for (const theme of ["light", "dark"]) {
         if (await page.locator("html").getAttribute("data-theme") !== theme) await page.getByRole("button", { name: /切换到.*模式/ }).click();
-        const colors = await page.evaluate(() => ({
+        const readColors = async () => ({ ...await page.evaluate(() => ({
           page: getComputedStyle(document.documentElement).backgroundColor,
-          card: getComputedStyle(document.querySelector(".host-history-card")).backgroundColor,
           cardText: getComputedStyle(document.querySelector(".host-history-card")).color,
           actionText: getComputedStyle(document.querySelector('.host-history-toolbar button:not([aria-pressed="true"])')).color,
           borderWidth: getComputedStyle(document.querySelector(".host-history-card")).borderTopWidth,
-        }));
-        if (theme === "light") assert.deepEqual(colors, { page: "rgb(255, 255, 255)", card: "rgb(242, 242, 242)", cardText: "rgb(31, 31, 31)", actionText: "rgb(68, 68, 68)", borderWidth: "0px" });
-        else assert.notEqual(colors.card, "rgb(242, 242, 242)");
+        })), card: await paintedSurfaceColor(page.locator(".host-history-card").first()) });
+        if (theme === "light") await expect.poll(readColors).toEqual({ page: "rgb(255, 255, 255)", card: "rgb(242, 242, 242)", cardText: "rgb(31, 31, 31)", actionText: "rgb(68, 68, 68)", borderWidth: "0px" });
+        else await expect.poll(async () => (await readColors()).card).not.toBe("rgb(242, 242, 242)");
+        const colors = await readColors();
         assert.equal(colors.borderWidth, "0px");
         const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(result.violations, []);
