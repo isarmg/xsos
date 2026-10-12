@@ -26,3 +26,7 @@ npm --prefix web run check:xcss
 metadata 查看包、目标和直接依赖，tree 查看完整依赖图，npm ci 按锁文件安装并核验摘要。模块或完整性检查失败时，核对清单、锁文件和当前协议源码是否匹配。
 
 更新公共库时一起更新调用代码、完整 revision、锁文件及对应测试。完整检查见[开发指南](development.md)；公共库作为构建依赖随产品交付，部署时使用产品自己的服务、配置和数据目录。
+
+当前 1.0.2 候选固定 xcss 1.0.5，Rust revision 为 `6a8113d4be76e5e8977ac7be08c1a7c57963ae49`。
+Web 输入为 `https://github.com/isarmg/xcss/releases/download/v1.0.5/xcss-web-1.0.5.tgz`，
+SHA256 为 `2ef4c5f32f4212cbef573180d82d31dc11fca79982c63862a430161eb5f8ae59`，npm SHA512 integrity 同时由锁文件和工具链检查约束。

@@ -336,30 +336,10 @@ function networkDisplayRecords(interfaces: Record<string, unknown>[], hardware: 
 }
 
 function gpuDisplayRecords(gpus: Record<string, unknown>[]): Record<string, unknown>[] {
-  const display = gpus.map(gpu => ({ ...gpu }));
-  const hidden = new Set<number>();
-  for (const [index, fallback] of gpus.entries()) {
-    if (fallback.vendor !== "amd" || fallback.source !== "amd-adlx-no-luid" || typeof fallback.name !== "string") continue;
-    if (gpus.filter(gpu => gpu.vendor === "amd" && gpu.name === fallback.name && gpu.source === "amd-adlx-no-luid").length !== 1) continue;
-    const matches = gpus.flatMap((gpu, candidate) =>
-      gpu.vendor === "amd" && gpu.name === fallback.name && gpu.source === "windows-dxgi-pdh" ? [candidate] : []);
-    if (matches.length === 0 || matches.length > 2) continue;
-    const active = matches.filter(candidate =>
-      typeof gpus[candidate].utilization_percent === "number" || typeof gpus[candidate].memory_used_bytes === "number");
-    if (active.length !== 1 || matches.some(candidate => candidate !== active[0]
-      && (typeof gpus[candidate].utilization_percent === "number" || typeof gpus[candidate].memory_used_bytes === "number"
-        || gpus[candidate].memory_total_bytes !== gpus[active[0]].memory_total_bytes))) continue;
-    // Older ADLX drivers have no LUID. Group one active DXGI reading with
-    // its static-only alias, while keeping all source IDs visible.
-    const primary = display[active[0]];
-    for (const key of ["temperature_celsius", "power_watts", "core_clock_mhz", "memory_clock_mhz"])
-      if (primary[key] == null && typeof fallback[key] === "number") primary[key] = fallback[key];
-    primary.related_ids = [...matches.filter(candidate => candidate !== active[0]).map(candidate => gpus[candidate].id), fallback.id];
-    primary.source = "windows-dxgi-pdh + amd-adlx-no-luid";
-    hidden.add(index);
-    for (const candidate of matches) if (candidate !== active[0]) hidden.add(candidate);
-  }
-  return display.filter((_, index) => !hidden.has(index));
+  // Device identity belongs to the collector. Model names and activity cannot
+  // prove that distinct DXGI LUIDs or no-LUID ADLX readings describe one GPU.
+  // Preserve collector-proven associations and keep unassociated readings separate.
+  return gpus.map(gpu => ({ ...gpu }));
 }
 
 function diskDisplayRecord(record: Record<string, unknown>): Record<string, unknown> {

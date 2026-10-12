@@ -23,7 +23,7 @@ from typing import NoReturn
 
 
 APPLICATION = "xsos"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 TARGET = "x86_64-unknown-linux-gnu"
 TAG = f"v{VERSION}"
 RELEASE_README = Path("docs/server-release-readme.md")

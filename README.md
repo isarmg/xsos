@@ -18,17 +18,17 @@ xsos 是自托管的主机监控服务，与 xsoc 客户端配合，集中接收
 
 ```sh
 set -eu
-sha256sum --check --strict xsos-1.0.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check --strict xsos-1.0.2-x86_64-unknown-linux-gnu.tar.gz.sha256
 sudo test ! -e /opt/isarmg/xsos
 sudo test ! -e /etc/isarmg/xsos.env
 sudo test ! -e /etc/systemd/system/xsos.service
 sudo test ! -e /var/lib/isarmg/xsos
 sudo install -d -m 0755 -o root -g root /opt/isarmg /opt/isarmg/xsos /opt/isarmg/xsos/releases
-sudo tar -xzf xsos-1.0.1-x86_64-unknown-linux-gnu.tar.gz \
+sudo tar -xzf xsos-1.0.2-x86_64-unknown-linux-gnu.tar.gz \
   -C /opt/isarmg/xsos/releases --same-permissions --delay-directory-restore
-sudo chown -R root:root /opt/isarmg/xsos/releases/1.0.1
-sudo /opt/isarmg/xsos/releases/1.0.1/bin/xsos \
-  verify-release --root /opt/isarmg/xsos/releases/1.0.1
+sudo chown -R root:root /opt/isarmg/xsos/releases/1.0.2
+sudo /opt/isarmg/xsos/releases/1.0.2/bin/xsos \
+  verify-release --root /opt/isarmg/xsos/releases/1.0.2
 sudo groupadd --system xsos
 sudo useradd --system --gid xsos --home-dir /var/lib/isarmg/xsos \
   --no-create-home --shell /usr/sbin/nologin xsos
@@ -53,10 +53,10 @@ XSOC_AUTHORIZATION_KEY=REPLACE_WITH_BASE64_ENCODED_32_RANDOM_BYTES
 先初始化，再启动服务：
 
 ```sh
-sudo ln -sT /opt/isarmg/xsos/releases/1.0.1 /opt/isarmg/xsos/current
+sudo ln -sT /opt/isarmg/xsos/releases/1.0.2 /opt/isarmg/xsos/current
 sudo systemd-run --wait --collect -p User=xsos -p Group=xsos \
   -p EnvironmentFile=/etc/isarmg/xsos.env \
-  /opt/isarmg/xsos/releases/1.0.1/bin/xsos init
+  /opt/isarmg/xsos/releases/1.0.2/bin/xsos init
 sudo install -m 0644 -o root -g root \
   /opt/isarmg/xsos/current/systemd/xsos.service /etc/systemd/system/xsos.service
 sudo systemctl daemon-reload
@@ -73,7 +73,7 @@ curl --fail http://127.0.0.1:18105/readyz
 ```sh
 git clone https://github.com/isarmg/xsos.git
 cd xsos
-git checkout v1.0.1
+git checkout v1.0.2
 mkdir -p "$HOME/xsos-output"
 python3 scripts/package-server-release.py "$HOME/xsos-output"
 ```
