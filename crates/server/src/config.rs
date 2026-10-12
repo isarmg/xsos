@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use xcss::config::{ConfigSource, EnvMapping, EnvValueKind, Override};
@@ -31,6 +30,8 @@ pub struct Cli {
     pub data_dir: Option<PathBuf>,
     #[arg(long, global = true)]
     pub bind: Option<SocketAddr>,
+    #[arg(long, global = true, action = clap::ArgAction::Set)]
+    pub development: Option<bool>,
     #[arg(long, global = true)]
     pub json: bool,
 }
@@ -38,29 +39,32 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Explicitly initialize a private data directory and first administrator.
-    Init,
-    /// Run a previously initialized instance.
-    Run {
-        #[arg(long)]
-        release_root: Option<PathBuf>,
+    Init {
+        #[arg(long, default_value = "admin")]
+        username: String,
     },
-    /// Inspect current configuration and data without changing either.
+    /// Run a previously initialized instance.
+    Run,
+    /// Validate configuration without requiring initialized instance data.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
     /// Query the live service readiness; offline instances never report ready.
     Status,
-    /// Run a deployment health check against the configured instance.
-    Doctor,
+    /// Validate initialized instance data, keys, and directories while offline.
+    Check,
     /// Print the exact machine-readable binary release identity.
     Identity,
     /// Print the immutable browser asset inventory compiled into this binary.
     WebAssets,
     /// Verify an immutable release tree with the binary contained in that tree.
     VerifyRelease(ReleaseRoot),
-    /// Reset an existing local administrator password.
-    AdminResetPassword(AdminResetPassword),
+    /// Manage the initialized local administrator.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -74,12 +78,13 @@ pub struct ReleaseRoot {
     pub root: PathBuf,
 }
 
-#[derive(Debug, Clone, clap::Args)]
-pub struct AdminResetPassword {
-    #[arg(long)]
-    pub database_url: String,
-    #[arg(long)]
-    pub username: String,
+#[derive(Debug, Subcommand)]
+pub enum AdminCommand {
+    /// Reset an existing administrator password, read from standard input.
+    ResetPassword {
+        #[arg(long)]
+        username: String,
+    },
 }
 
 #[derive(Clone)]
@@ -87,27 +92,27 @@ pub struct ValidatedConfig {
     pub bind: SocketAddr,
     pub database_url: String,
     pub administrator_origin: AdministratorOriginMode,
-    pub bootstrap_admin_username: String,
-    pub bootstrap_admin_password: Option<String>,
     pub telemetry: TelemetryWriterConfig,
     pub retention: RetentionConfig,
     pub static_dir: Option<PathBuf>,
-    pub client_authorization_key: [u8; 32],
+    pub log_level: String,
+    pub trusted_proxies: xcss::client_ip::TrustedProxies,
     pub data_dir: PathBuf,
     pub sources: BTreeMap<String, ConfigSource>,
 }
 
 impl ValidatedConfig {
     pub fn from_runtime() -> anyhow::Result<Self> {
-        Self::from_sources(None, None, None)
+        Self::from_sources(None, None, None, None)
     }
 
     pub fn from_sources(
         config: Option<&Path>,
         data_dir: Option<&Path>,
         bind: Option<SocketAddr>,
+        development: Option<bool>,
     ) -> anyhow::Result<Self> {
-        let config = config.map(normalize_config_path).transpose()?;
+        let config = selected_config_path(config)?;
         let file = config
             .as_deref()
             .map(xcss::config::read_private_file)
@@ -123,6 +128,9 @@ impl ValidatedConfig {
         if let Some(bind) = bind {
             command_line.push(Override::new("/bind", bind.to_string()));
         }
+        if let Some(development) = development {
+            command_line.push(Override::new("/development", development));
+        }
         let loaded = xcss::config::resolve_validated(
             &Settings::default(),
             file.as_deref(),
@@ -131,40 +139,15 @@ impl ValidatedConfig {
             validate_intrinsic,
         )?;
         let settings = loaded.value;
-        let database_url = match settings.database_url {
-            Some(url) => url,
-            None => format!(
-                "sqlite://{}",
-                settings
-                    .data_dir
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("data_dir or database_url is required"))?
-                    .join("xsos.sqlite3")
-                    .display()
-            ),
-        };
-        let database_path = crate::database_schema::database_path(&database_url)?;
-        let data_dir = settings.data_dir.unwrap_or_else(|| {
-            database_path
-                .parent()
-                .expect("database has a parent")
-                .to_path_buf()
-        });
-        anyhow::ensure!(
-            data_dir.is_absolute() && database_path.parent() == Some(data_dir.as_path()),
-            "database must be a direct child of the absolute data_dir"
-        );
-        let bind: SocketAddr = settings
-            .bind
-            .parse()
-            .map_err(|_| anyhow::anyhow!("bind must be a socket address"))?;
+        let data_dir = settings.data_dir;
+        let database_url = format!("sqlite://{}", data_dir.join("xsos.sqlite3").display());
+        crate::database_schema::database_path(&database_url)?;
+        let bind = settings.bind;
         let cookie_mode = cookie_mode(bind, settings.development)?;
         let static_dir = development_static_dir(
             settings.development_web_dir.as_deref(),
             settings.development,
         )?;
-        let bootstrap_admin_username =
-            xcss::admin_auth::normalize_administrator_username(&settings.bootstrap_admin_username)?;
         let telemetry = TelemetryWriterConfig::new(
             settings.telemetry_queue_capacity,
             settings.telemetry_batch_size,
@@ -188,26 +171,15 @@ impl ValidatedConfig {
             Duration::from_millis(settings.retention_max_run_milliseconds),
             Duration::from_millis(settings.retention_yield_milliseconds),
         )?;
-        let client_authorization_key = STANDARD
-            .decode(
-                settings
-                    .client_authorization_key
-                    .ok_or_else(|| anyhow::anyhow!("client_authorization_key is required"))?,
-            )?
-            .try_into()
-            .map_err(|_| {
-                anyhow::anyhow!("client_authorization_key must decode to exactly 32 bytes")
-            })?;
         Ok(Self {
             bind,
             database_url,
             administrator_origin: cookie_mode,
-            bootstrap_admin_username,
-            bootstrap_admin_password: settings.bootstrap_admin_password,
             telemetry,
             retention,
             static_dir,
-            client_authorization_key,
+            log_level: settings.log_level,
+            trusted_proxies: xcss::client_ip::TrustedProxies::parse(&settings.trusted_proxies)?,
             data_dir,
             sources: loaded.sources,
         })
@@ -217,13 +189,11 @@ impl ValidatedConfig {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Settings {
-    database_url: Option<String>,
-    data_dir: Option<PathBuf>,
-    bind: String,
+    data_dir: PathBuf,
+    bind: SocketAddr,
     development: bool,
-    bootstrap_admin_username: String,
-    bootstrap_admin_password: Option<String>,
-    client_authorization_key: Option<String>,
+    log_level: String,
+    trusted_proxies: Vec<String>,
     development_web_dir: Option<String>,
     telemetry_queue_capacity: usize,
     telemetry_batch_size: usize,
@@ -243,13 +213,11 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            database_url: None,
-            data_dir: None,
-            bind: "127.0.0.1:18105".into(),
+            data_dir: PathBuf::from("/var/lib/isarmg/xsos"),
+            bind: "127.0.0.1:18105".parse().expect("valid default bind"),
             development: false,
-            bootstrap_admin_username: "admin".into(),
-            bootstrap_admin_password: None,
-            client_authorization_key: None,
+            log_level: "info".into(),
+            trusted_proxies: Vec::new(),
             development_web_dir: None,
             telemetry_queue_capacity: 256,
             telemetry_batch_size: 64,
@@ -268,12 +236,7 @@ impl Default for Settings {
     }
 }
 
-const ENVIRONMENT: [EnvMapping<'static>; 21] = [
-    EnvMapping {
-        variable: "XSOS_DATABASE_URL",
-        path: "/database_url",
-        kind: EnvValueKind::String,
-    },
+const ENVIRONMENT: [EnvMapping<'static>; 19] = [
     EnvMapping {
         variable: "XSOS_DATA_DIR",
         path: "/data_dir",
@@ -290,22 +253,17 @@ const ENVIRONMENT: [EnvMapping<'static>; 21] = [
         kind: EnvValueKind::Boolean,
     },
     EnvMapping {
-        variable: "XSOS_BOOTSTRAP_ADMIN_USERNAME",
-        path: "/bootstrap_admin_username",
+        variable: "XSOS_TRUSTED_PROXIES",
+        path: "/trusted_proxies",
+        kind: EnvValueKind::Json,
+    },
+    EnvMapping {
+        variable: "XSOS_LOG_LEVEL",
+        path: "/log_level",
         kind: EnvValueKind::String,
     },
     EnvMapping {
-        variable: "XSOS_BOOTSTRAP_ADMIN_PASSWORD",
-        path: "/bootstrap_admin_password",
-        kind: EnvValueKind::String,
-    },
-    EnvMapping {
-        variable: "XSOC_AUTHORIZATION_KEY",
-        path: "/client_authorization_key",
-        kind: EnvValueKind::String,
-    },
-    EnvMapping {
-        variable: "XCSS_DEV_WEB_DIR",
+        variable: "XSOS_DEVELOPMENT_WEB_DIR",
         path: "/development_web_dir",
         kind: EnvValueKind::String,
     },
@@ -454,7 +412,14 @@ mod tests {
 
     #[test]
     fn product_cli_rejects_unknown_maintenance_commands() {
-        for removed in ["migrate", "backup-create", "backup-verify", "restore"] {
+        for removed in [
+            "migrate",
+            "backup-create",
+            "backup-verify",
+            "restore",
+            "doctor",
+            "admin-reset-password",
+        ] {
             assert!(
                 Cli::try_parse_from(["xsos", removed]).is_err(),
                 "removed product command {removed} was still accepted"
@@ -476,7 +441,8 @@ mod tests {
     #[test]
     fn immutable_release_commands_require_an_explicit_root() {
         let root = "/opt/isarmg/xsos/releases/0.12.0";
-        assert!(Cli::try_parse_from(["xsos", "run", "--release-root", root]).is_ok());
+        assert!(Cli::try_parse_from(["xsos", "run"]).is_ok());
+        assert!(Cli::try_parse_from(["xsos", "run", "--release-root", root]).is_err());
         assert!(Cli::try_parse_from(["xsos", "verify-release", "--root", root]).is_ok());
         assert!(Cli::try_parse_from(["xsos", "run", "--release-root"]).is_err());
         assert!(Cli::try_parse_from(["xsos", "verify-release"]).is_err());
@@ -526,35 +492,23 @@ fn validate_intrinsic(
 ) -> Result<(), xcss::config::ConfigError> {
     let invalid =
         |path| xcss::config::ConfigError::new(xcss::config::Reason::InvalidValue, path, source);
-    settings
-        .bind
-        .parse::<SocketAddr>()
-        .map_err(|_| invalid("/bind"))?;
-    if let Some(key) = &settings.client_authorization_key
-        && STANDARD
-            .decode(key)
-            .map_err(|_| invalid("/client_authorization_key"))?
-            .len()
-            != 32
-    {
-        return Err(invalid("/client_authorization_key"));
-    }
-    xcss::admin_auth::normalize_administrator_username(&settings.bootstrap_admin_username)
-        .map_err(|_| invalid("/bootstrap_admin_username"))?;
-    if let Some(password) = &settings.bootstrap_admin_password {
-        xcss::admin_auth::validate_password(password)
-            .map_err(|_| invalid("/bootstrap_admin_password"))?;
-    }
-    if settings
-        .data_dir
-        .as_ref()
-        .is_some_and(|path| !path.is_absolute())
+
+    if !settings.data_dir.is_absolute()
+        || settings
+            .data_dir
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
     {
         return Err(invalid("/data_dir"));
     }
-    if let Some(url) = &settings.database_url {
-        crate::database_schema::database_path(url).map_err(|_| invalid("/database_url"))?;
+    if !matches!(
+        settings.log_level.as_str(),
+        "trace" | "debug" | "info" | "warn" | "error" | "off"
+    ) {
+        return Err(invalid("/log_level"));
     }
+    xcss::client_ip::TrustedProxies::parse(&settings.trusted_proxies)
+        .map_err(|_| invalid("/trusted_proxies"))?;
     for (path, value, min, max) in [
         (
             "/telemetry_queue_capacity",
@@ -674,4 +628,221 @@ pub fn normalize_config_path(path: &Path) -> anyhow::Result<PathBuf> {
         "config path cannot contain parent traversal"
     );
     Ok(std::path::absolute(path)?)
+}
+
+#[cfg(test)]
+mod unified_configuration_tests {
+    use super::*;
+    #[test]
+    fn explicit_missing_config_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.json");
+        assert!(ValidatedConfig::from_sources(Some(&missing), None, None, None).is_err());
+    }
+    #[test]
+    fn defaults_and_environment_belong_to_this_server() {
+        let settings = Settings::default();
+        assert!(!settings.development);
+        assert_eq!(settings.data_dir, PathBuf::from("/var/lib/isarmg/xsos"));
+        assert!(
+            ENVIRONMENT
+                .iter()
+                .all(|mapping| mapping.variable.starts_with("XSOS_"))
+        );
+        assert!(
+            !ENVIRONMENT
+                .iter()
+                .any(|mapping| mapping.path.contains("bootstrap"))
+        );
+    }
+    #[test]
+    fn runtime_settings_reject_removed_secret_and_database_authorities() {
+        for file in [
+            br#"{"database_url":"sqlite:///tmp/other.sqlite3"}"#.as_slice(),
+            br#"{"client_authorization_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}"#
+                .as_slice(),
+        ] {
+            assert!(
+                xcss::config::resolve_validated(
+                    &Settings::default(),
+                    Some(file),
+                    &[],
+                    &[],
+                    validate_intrinsic
+                )
+                .is_err()
+            );
+        }
+        assert!(!ENVIRONMENT.iter().any(|mapping| matches!(
+            mapping.variable,
+            "XSOS_DATABASE_URL" | "XSOS_AUTHORIZATION_KEY"
+        )));
+    }
+    #[test]
+    fn log_level_and_trusted_proxies_follow_prefixed_environment_precedence() {
+        assert_eq!(Settings::default().log_level, "info");
+        assert!(Settings::default().trusted_proxies.is_empty());
+        let file = br#"{"log_level":"warn","trusted_proxies":["192.0.2.0/24"]}"#;
+        let environment = xcss::config::read_environment(&ENVIRONMENT, |name| match name {
+            "XSOS_LOG_LEVEL" => Some("debug".into()),
+            "XSOS_TRUSTED_PROXIES" => Some(r#"["127.0.0.1/32"]"#.into()),
+            _ => None,
+        })
+        .unwrap();
+        let loaded = xcss::config::resolve_validated(
+            &Settings::default(),
+            Some(file),
+            &environment,
+            &[],
+            validate_intrinsic,
+        )
+        .unwrap();
+        assert_eq!(loaded.value.log_level, "debug");
+        assert_eq!(loaded.value.trusted_proxies, ["127.0.0.1/32"]);
+        for file in [
+            br#"{"log_level":"private-invalid-filter"}"#.as_slice(),
+            br#"{"trusted_proxies":["invalid"]}"#.as_slice(),
+        ] {
+            assert!(
+                xcss::config::resolve_validated(
+                    &Settings::default(),
+                    Some(file),
+                    &[],
+                    &[],
+                    validate_intrinsic
+                )
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn runtime_configuration_rejects_bootstrap_passwords() {
+        let file = br#"{"bootstrap_admin_password":"never-persist-this"}"#;
+        assert!(
+            xcss::config::resolve_validated(
+                &Settings::default(),
+                Some(file),
+                &[],
+                &[],
+                validate_intrinsic
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn bind_precedence_is_cli_then_prefixed_environment_then_file() {
+        let file = br#"{"bind":"127.0.0.1:19001"}"#;
+        let environment = xcss::config::read_environment(&ENVIRONMENT, |name| {
+            (name == "XSOS_BIND").then(|| "127.0.0.1:19002".into())
+        })
+        .unwrap();
+        let loaded = xcss::config::resolve_validated(
+            &Settings::default(),
+            Some(file),
+            &environment,
+            &[Override::new("/bind", "127.0.0.1:19003")],
+            validate_intrinsic,
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.value.bind,
+            "127.0.0.1:19003".parse::<SocketAddr>().unwrap()
+        );
+        let loaded = xcss::config::resolve_validated(
+            &Settings::default(),
+            Some(file),
+            &environment,
+            &[],
+            validate_intrinsic,
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.value.bind,
+            "127.0.0.1:19002".parse::<SocketAddr>().unwrap()
+        );
+    }
+}
+
+/// An omitted default file is optional; explicit files and unreadable defaults fail closed.
+pub fn selected_config_path(config: Option<&Path>) -> anyhow::Result<Option<PathBuf>> {
+    match config {
+        Some(path) => Ok(Some(normalize_config_path(path)?)),
+        None => {
+            let path = PathBuf::from("/etc/isarmg/xsos/config.json");
+            existing_default_config(path)
+        }
+    }
+}
+
+#[cfg(test)]
+mod initialization_cli_tests {
+    use super::*;
+    #[test]
+    fn explicit_username_and_global_configuration_are_accepted() {
+        for args in [
+            vec![
+                "init",
+                "--username",
+                "admin",
+                "--config",
+                "/tmp/config.json",
+            ],
+            vec![
+                "--config",
+                "/tmp/config.json",
+                "init",
+                "--username",
+                "admin",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(std::iter::once("xsos").chain(args)).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from([
+                "xsos",
+                "admin",
+                "reset-password",
+                "--username",
+                "admin",
+                "--database-url",
+                "sqlite:///tmp/xsos.sqlite3"
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["xsos", "check"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "xsos",
+                "admin",
+                "reset-password",
+                "--username",
+                "admin",
+                "--data-dir",
+                "/tmp/xsos"
+            ])
+            .is_ok()
+        );
+    }
+}
+
+fn existing_default_config(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod default_configuration_tests {
+    use super::*;
+    #[test]
+    fn dangling_default_symlink_is_not_treated_as_an_absent_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        assert!(existing_default_config(path.clone()).unwrap().is_none());
+        std::os::unix::fs::symlink(directory.path().join("missing.json"), &path).unwrap();
+        let selected = existing_default_config(path).unwrap().unwrap();
+        assert!(xcss::config::read_private_file(&selected).is_err());
+    }
 }

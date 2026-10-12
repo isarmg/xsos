@@ -1,106 +1,64 @@
-# xsos 1.0.2 发行包部署手册
+# 安装与运行
 
-## 安装与初始化
+发行包根目录包含 `install.sh`、`bin/xsos`、`config/xsos.json.example` 与 `systemd/xsos.service`。Linux x86_64 二进制内嵌管理 Web；普通运行不依赖发行目录、版本目录或 current 链接。解包后始终在该发行包中执行安装脚本。
 
+## 安装
 
-在一台尚未安装本服务的 Linux x86_64 / glibc 主机上，以可使用 sudo 的管理员执行。需要 systemd、GNU tar、sha256sum、curl、OpenSSL 以及账户管理工具。
+先把示例 JSON 复制到私有文件并填写所需参数。共同参数为 bind、data_dir、development、log_level、trusted_proxies；默认监听 `127.0.0.1:18105`，development=false。不要填写管理员密码、数据库 URL 或业务加密密钥。
 
-先从 [Release](https://github.com/isarmg/xsos/releases) 下载同版 Linux 归档及 `.sha256`，在下载目录执行；以下检查用于确认安装位置为空；已有服务的管理见本文后面的运行检查。
-
-```sh
-set -eu
-sha256sum --check --strict xsos-1.0.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-sudo test ! -e /opt/isarmg/xsos
-sudo test ! -e /etc/isarmg/xsos.env
-sudo test ! -e /etc/systemd/system/xsos.service
-sudo test ! -e /var/lib/isarmg/xsos
-sudo install -d -m 0755 -o root -g root /opt/isarmg /opt/isarmg/xsos /opt/isarmg/xsos/releases
-sudo tar -xzf xsos-1.0.2-x86_64-unknown-linux-gnu.tar.gz \
-  -C /opt/isarmg/xsos/releases --same-permissions --delay-directory-restore
-sudo chown -R root:root /opt/isarmg/xsos/releases/1.0.2
-sudo /opt/isarmg/xsos/releases/1.0.2/bin/xsos \
-  verify-release --root /opt/isarmg/xsos/releases/1.0.2
-sudo groupadd --system xsos
-sudo useradd --system --gid xsos --home-dir /var/lib/isarmg/xsos \
-  --no-create-home --shell /usr/sbin/nologin xsos
-sudo install -d -m 0700 -o xsos -g xsos /var/lib/isarmg/xsos/db
-sudo install -d -m 0755 -o root -g root /etc/isarmg
-sudo sh -c 'umask 077; set -C; : > /etc/isarmg/xsos.env'
-openssl rand -base64 32
-sudoedit /etc/isarmg/xsos.env
+```bash
+umask 077
+cp config/xsos.json.example "$HOME/xsos-config.json"
+# 编辑 "$HOME/xsos-config.json"，尤其核对 data_dir 和 bind
+sudo -v
+read -r -s -p 'Initial administrator password: ' password; printf '\n'
+printf '%s\n' "$password" | sudo ./install.sh setup "$HOME/xsos-config.json" admin
+unset password
 ```
 
-填写下列配置：将密码替换为至少 12 字节的独立强密码，密钥替换为上一步生成的 Base64 值；密钥需长期保存。
+唯一安装接口为 `install.sh setup CONFIG_JSON [USERNAME]`。省略 USERNAME 时使用 admin；密码直接传给 init 的 stdin，不写入 JSON、环境变量、unit 或日志。setup 创建专用非 root 服务账户 `isarmg-xsos`，安装所选配置、二进制和 unit，依次运行 config validate、init 和 check。已有配置或非空数据目录会拒绝；setup 不覆盖实例，也不自动启动服务。
 
-```dotenv
-XSOS_DATABASE_URL=sqlite:///var/lib/isarmg/xsos/db/xsos.sqlite3
-XSOS_BIND=127.0.0.1:18105
-XSOS_DEVELOPMENT=false
-XSOS_BOOTSTRAP_ADMIN_USERNAME=admin
-XSOS_BOOTSTRAP_ADMIN_PASSWORD=REPLACE_WITH_A_UNIQUE_LONG_PASSWORD
-XSOC_AUTHORIZATION_KEY=REPLACE_WITH_BASE64_ENCODED_32_RANDOM_BYTES
-```
+- `/opt/isarmg/xsos/bin/xsos`：root 所有的可执行文件
+- `/etc/isarmg/xsos/config.json`：`isarmg-xsos` 所有，文件 0600、父目录0700
+- data_dir：所选 JSON 指定的私有状态目录，默认 `/var/lib/isarmg/xsos`，服务账户所有、0700
+- `/run/isarmg/xsos`：仅由 systemd 在服务运行期间创建；init 和离线检查不依赖它
 
-先初始化，再启动服务：
+init 在 data_dir 中创建 `xsos.sqlite3`、`secrets.json`、日志和必要目录；业务密钥只在首次初始化时自动生成。run/check 不会补建丢失的密钥或覆盖数据库。升级时保留完整实例状态。
+
+setup 成功后按输出启动，再检查在线状态：
 
 ```sh
-sudo ln -sT /opt/isarmg/xsos/releases/1.0.2 /opt/isarmg/xsos/current
-sudo systemd-run --wait --collect -p User=xsos -p Group=xsos \
-  -p EnvironmentFile=/etc/isarmg/xsos.env \
-  /opt/isarmg/xsos/releases/1.0.2/bin/xsos init
-sudo install -m 0644 -o root -g root \
-  /opt/isarmg/xsos/current/systemd/xsos.service /etc/systemd/system/xsos.service
-sudo systemctl daemon-reload
 sudo systemctl enable --now xsos.service
+sudo -u isarmg-xsos -- /opt/isarmg/xsos/bin/xsos status --json
 curl --fail http://127.0.0.1:18105/readyz
 ```
 
-就绪响应应为 `{"ready":true}`。通过 HTTPS 反向代理转发到 `127.0.0.1:18105`，使用配置的管理员账号登录；初始化成功后从环境文件移除 `XSOS_BOOTSTRAP_ADMIN_PASSWORD`。客户端须另行安装并配对。
+如果调整了 bind，检查对应的实际地址。公网 HTTPS、证书与防火墙由外部入口负责；trusted_proxies 仅用于可信代理提供的业务客户端 IP，不改变 TLS 或认证语义。
 
+## 升级
 
-## HTTPS 入口
-
-在同机反向代理配置域名与系统信任的证书，将 HTTPS 请求转发到 `http://127.0.0.1:18105`，保留原始 Host、Origin 与 Sec-Fetch-Site。外部访问使用这个 HTTPS 地址。后台端口保持回环监听。
-
-## 运行检查
+在新发行包的解压目录中，只执行：
 
 ```sh
-sudo systemctl status xsos.service --no-pager
-sudo journalctl --utc -u xsos.service -n 100 --no-pager
-curl --fail http://127.0.0.1:18105/readyz
+sudo ./install.sh upgrade
 ```
 
-预期服务为 active，`/readyz` 返回 `{"ready":true}`；`/healthz` 的正常状态为 HTTP 204。然后在浏览器打开 HTTPS 地址并登录，创建一个实例，按 [xsoc 安装说明](https://github.com/isarmg/xsoc/blob/main/docs/platform-setup.md)完成配对。管理台应收到该主机的新报告。
+upgrade 不接受额外参数，读取已安装的 `/etc/isarmg/xsos/config.json`。先验证配置；如果服务正在运行，先停止并等待退出。随后替换二进制/unit、更新所选状态目录的 systemd 写入许可，执行 daemon-reload 和离线 check；检查成功且此前处于运行状态才重新启动。原来停止的服务仍保持停止；检查失败时保持停止并报告错误。
 
-修改环境文件后执行 `sudo systemctl restart xsos.service`，再检查就绪状态。`XSOC_AUTHORIZATION_KEY` 与数据库内密文配套，日常修改密码或实例授权码时保持它不变；替换该密钥会使已有密文不可读。
+升级不执行 init，不修改配置、业务密钥或数据库内容，不备份，也不递归改变数据目录所有者。已有状态检查失败时保留现场、读取具体错误，不通过重新初始化或替换密钥绕过检查。
 
-## 安装布局
+## 配置和运行检查
 
-| 路径 | 用途 |
-|---|---|
-| `/opt/isarmg/xsos/releases/1.0.2/` | root 所有的只读发行目录 |
-| `/opt/isarmg/xsos/current` | 指向该版本的绝对链接 |
-| `/etc/isarmg/xsos.env` | root 0600 配置，由 systemd 加载 |
-| `/var/lib/isarmg/xsos/db/xsos.sqlite3` | 服务账号所有的当前数据库 |
-| `/var/lib/isarmg/xsos/db/logs/` | 私有轮转运行日志 |
+```sh
+sudo -u isarmg-xsos -- /opt/isarmg/xsos/bin/xsos config validate --json
+sudo systemctl stop xsos.service
+sudo -u isarmg-xsos -- /opt/isarmg/xsos/bin/xsos check --json
+sudo systemctl start xsos.service
+sudo journalctl --utc -u xsos.service -n 100 --no-pager
+```
 
-归档的顶层是 `1.0.2/`，包含 `bin/xsos`、`systemd/xsos.service`、`web-assets.json`、`README.md` 和 `RELEASE-MANIFEST.json`。管理页面已内嵌到二进制。修改运行参数使用环境文件；发行目录保留下载时的内容与权限，供启动校验使用。
+config validate 是纯配置检查，初始化之前即可执行。check 离线检查实例，需先停服。status 检查在线 readiness。服务使用公共 UTC 结构化日志、data_dir/logs 轮转和120秒 systemd停止超时。
 
-`identity` 输出产品、版本、源码提交和结构身份；`verify-release` 核对完整文件树。SHA-256 用于核对下载完整性，仍需从可信发布页取得归档及校验文件。
+安装脚本按所选 data_dir 写入 systemd drop-in 的 ReadWritePaths；不依靠固定的默认数据目录。更改 data_dir 后需安排维护、准备对应完整实例状态和所有者权限，再从当前发行包执行 upgrade 以更新写入许可；不能仅改路径后期望 run 初始化新目录。
 
-| 身份字段 | 当前值 |
-|---|---|
-| `application` | `xsos` |
-| `version` | `1.0.2` |
-| `schema_revision` | `1` |
-| `target` | `x86_64-unknown-linux-gnu` |
-
-## 遇到问题
-
-- 校验失败：重新核对下载来源、文件名及完整性；保留原始错误。
-- `init` 失败：检查环境文件中的密码、Base64 密钥、数据目录所有者与 0700 权限。
-- 服务无法启动：先读 journal，确认已初始化，发行树校验通过且配置和数据库配套。
-- 本机 ready 正常但无法登录：检查 HTTPS 代理、浏览器地址、Host/Origin 和主机时间。
-- 客户端离线：检查客户端日志、HTTPS 信任和配对；再确认报告投递结果。
-
-[配置参考](https://github.com/isarmg/xsos/blob/main/docs/configuration.md) · [日常运维](https://github.com/isarmg/xsos/blob/main/docs/administration.md) · [故障排查](https://github.com/isarmg/xsos/blob/main/docs/troubleshooting.md)
+[配置](https://github.com/isarmg/xsos/blob/main/docs/configuration.md) · [命令](https://github.com/isarmg/xsos/blob/main/docs/cli.md)

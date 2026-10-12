@@ -15,14 +15,27 @@ fn private(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 fn output(config: &Path, args: &[&str]) -> Output {
-    Command::new(BINARY)
+    use std::io::Write as _;
+    let mut child = Command::new(BINARY)
         .env_clear()
         .args(args)
         .arg("--config")
         .arg(config)
         .arg("--json")
-        .output()
-        .unwrap()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if args.first() == Some(&"init") || args.starts_with(&["admin", "reset-password"]) {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"test-password1!\n")
+            .unwrap();
+    }
+    child.wait_with_output().unwrap()
 }
 fn report(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
@@ -53,7 +66,9 @@ fn state(path: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
         }
     }
     let mut result = BTreeMap::new();
-    collect(path, path, &mut result);
+    if path.exists() {
+        collect(path, path, &mut result);
+    }
     result
 }
 struct Running(Child);
@@ -67,15 +82,14 @@ impl Drop for Running {
 fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let data = temporary.path().join("data");
-    private(&data);
+    let data = temporary.path().join("data %#?");
     let shared = temporary.path().join("shared");
     private(&shared);
     let socket = TcpListener::bind("127.0.0.1:0").unwrap();
     let bind = socket.local_addr().unwrap();
     drop(socket);
     let config = temporary.path().join("config.json");
-    let mut settings = json!({"data_dir":data,"bind":bind.to_string(),"development":true,"client_authorization_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","bootstrap_admin_password":"test-password1!"});
+    let mut settings = json!({"data_dir":data,"bind":bind.to_string(),"development":true});
     fs::write(&config, serde_json::to_vec(&settings).unwrap()).unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
     let empty = state(&data);
@@ -100,10 +114,25 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
             assert_eq!(report(&rejected)["code"], "invalid_cli_input");
         }
     }
+    let before_init = output(&config, &["config", "validate"]);
+    assert!(
+        before_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&before_init.stdout)
+    );
+    assert_eq!(report(&before_init)["status"], "valid");
+    assert!(
+        !data.exists(),
+        "pure configuration validation created state"
+    );
+    let unchecked = output(&config, &["check"]);
+    assert!(!unchecked.status.success());
+    assert!(!data.exists(), "check initialized a missing instance");
     let missing = output(&config, &["run"]);
     assert!(!missing.status.success());
     assert!(report(&missing)["code"].is_string());
     assert_eq!(state(&data), empty, "run initialized an empty directory");
+    assert!(!data.exists(), "run created a missing data directory");
     let invalid = output(&config, &["nonsense"]);
     assert_eq!(invalid.status.code(), Some(2));
     assert!(report(&invalid)["code"].is_string());
@@ -119,6 +148,23 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
         )
     );
     assert_eq!(report(&initialized)["ready"], false);
+    assert!(data.is_dir(), "init must create a missing data directory");
+    let persisted_key = fs::read(data.join("secrets.json")).unwrap();
+    assert_eq!(
+        fs::metadata(data.join("secrets.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let secrets: Value = serde_json::from_slice(&persisted_key).unwrap();
+    assert!(secrets["client_authorization_key"].is_string());
+    assert!(
+        !String::from_utf8_lossy(&initialized.stdout)
+            .contains(secrets["client_authorization_key"].as_str().unwrap())
+    );
+    assert!(data.join("xsos.sqlite3").is_file());
     let initialized_state = state(&data);
     assert!(!initialized_state.is_empty());
     let again = output(&config, &["init"]);
@@ -156,6 +202,19 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
         initialized_state,
         "validation changed bytes or timestamps"
     );
+    let checked = output(&config, &["check"]);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stdout)
+    );
+    assert_eq!(report(&checked)["initialized"], true);
+    assert_eq!(report(&checked)["ready"], false);
+    assert_eq!(
+        state(&data),
+        initialized_state,
+        "check changed bytes or timestamps"
+    );
     let stopped = output(&config, &["status"]);
     assert!(!stopped.status.success());
     report(&stopped);
@@ -168,7 +227,7 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
     fs::write(&pending, b"{}").unwrap();
     fs::set_permissions(&pending, fs::Permissions::from_mode(0o600)).unwrap();
     let pending_state = state(&data);
-    for command in ["run", "init"] {
+    for command in ["run", "init", "check"] {
         let rejected = output(&config, &[command]);
         assert!(!rejected.status.success());
         assert_eq!(report(&rejected)["code"], "state.maintenance_pending");
@@ -247,6 +306,9 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    let checked_live = output(&config, &["check"]);
+    assert!(!checked_live.status.success());
+    assert_eq!(report(&checked_live)["code"], "state.lock_busy");
     let while_running = output(&config, &["config", "validate"]);
     assert!(
         while_running.status.success(),
@@ -294,6 +356,45 @@ fn explicit_initialization_read_only_diagnostics_and_real_readiness() {
             "missing common event {event}: {records:?}"
         );
     }
+    assert_eq!(fs::read(data.join("secrets.json")).unwrap(), persisted_key);
+    let restarted = Command::new(BINARY)
+        .env_clear()
+        .args(["run", "--config"])
+        .arg(&config)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut restarted = Running(restarted);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !output(&config, &["status"]).status.success() {
+        assert!(
+            restarted.0.try_wait().unwrap().is_none(),
+            "restarted server exited"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "restarted service never became ready"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(fs::read(data.join("secrets.json")).unwrap(), persisted_key);
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &restarted.0.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(restarted.0.wait().unwrap().success());
+    let reset = output(&config, &["admin", "reset-password", "--username", "admin"]);
+    assert!(
+        reset.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reset.stdout)
+    );
+    assert_eq!(report(&reset)["status"], "password-reset");
+    assert_eq!(fs::read(data.join("secrets.json")).unwrap(), persisted_key);
 }
 
 fn assert_http_error(
@@ -376,4 +477,58 @@ fn assert_http_error(
     assert!(record["code"].is_string(), "{record}");
     assert_eq!(record["request_id"].as_str(), Some(request_id.as_str()));
     request_id.clone()
+}
+
+#[test]
+fn missing_or_corrupt_persistent_keys_are_never_repaired_by_run_or_check() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let data = temporary.path().join("instance");
+    let config = temporary.path().join("config.json");
+    fs::write(
+        &config,
+        serde_json::to_vec(&json!({"data_dir": data, "bind":"127.0.0.1:0", "development":true}))
+            .unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    let initialized = output(&config, &["init"]);
+    assert!(
+        initialized.status.success(),
+        "{} / {}",
+        String::from_utf8_lossy(&initialized.stdout),
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let secrets_path = data.join("secrets.json");
+    let valid_keys = fs::read(&secrets_path).unwrap();
+    fs::remove_file(&secrets_path).unwrap();
+    for invalid in [None, Some(b"not JSON".as_slice()), Some(br#"{"client_authorization_key":"invalid"}"#.as_slice()), Some(br#"{"client_authorization_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","unexpected":true}"#.as_slice())] {
+        if let Some(bytes) = invalid {
+            fs::write(&secrets_path, bytes).unwrap();
+            fs::set_permissions(&secrets_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let before = state(&data);
+        assert!(output(&config, &["config", "validate"]).status.success());
+        for command in ["run", "check"] {
+            let rejected = output(&config, &[command]);
+            assert!(!rejected.status.success(), "{command} accepted missing or corrupt persisted keys");
+            report(&rejected);
+            assert_eq!(state(&data), before, "{command} repaired or changed instance state");
+        }
+    }
+    fs::write(&secrets_path, valid_keys).unwrap();
+    assert!(output(&config, &["check"]).status.success());
+}
+
+#[test]
+fn offline_binary_artifacts_do_not_read_instance_configuration() {
+    let inaccessible = Path::new("/missing-instance/../unused-config.json");
+    for command in ["identity", "web-assets"] {
+        let result = output(inaccessible, &[command]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }

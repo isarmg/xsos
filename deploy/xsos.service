@@ -6,19 +6,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=xsos
-Group=xsos
-EnvironmentFile=/etc/isarmg/xsos.env
-ExecStart=/opt/isarmg/xsos/current/bin/xsos run --release-root /opt/isarmg/xsos/current
-StateDirectory=isarmg/xsos/db
-StateDirectoryMode=0700
+User=isarmg-xsos
+Group=isarmg-xsos
+ExecStart=/opt/isarmg/xsos/bin/xsos run --config /etc/isarmg/xsos/config.json
 RuntimeDirectory=isarmg/xsos
 RuntimeDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
+ProtectHome=read-only
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -38,6 +34,7 @@ AmbientCapabilities=
 ProtectProc=invisible
 ProcSubset=pid
 RemoveIPC=true
+TimeoutStopSec=120s
 Restart=on-failure
 RestartSec=3
 

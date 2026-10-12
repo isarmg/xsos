@@ -6,8 +6,7 @@ import { withLocalServer } from "./local-server.mjs";
 for (const engine of [chromium, firefox]) {
 await withLocalServer({ prefix: "XSOS", binary: process.env.HOST_TEST_SERVER_BINARY ?? "../target/x86_64-unknown-linux-gnu/debug/xsos",
   service: "xsos",
-  releaseRoot: process.env.HOST_TEST_RELEASE_ROOT,
-  extraEnv: { XSOS_DEVELOPMENT: "true", XSOC_AUTHORIZATION_KEY: randomBytes(32).toString("base64") } }, async ({ base, password }) => {
+  extraEnv: { XSOS_DEVELOPMENT: "true" } }, async ({ base, password }) => {
   const browser = await engine.launch();
   try {
     const page = await browser.newPage({ locale: "zh-CN" }); const errors = [];

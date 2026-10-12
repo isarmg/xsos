@@ -90,9 +90,11 @@ jobs:
             scripts/write-server-release-manifest.py \
             scripts/test-server-release-tooling.py
           python3 scripts/test-server-release-tooling.py
+          python3 scripts/test-installation.py
+          bash -n install.sh
           test "$(grep -Ec '^[[:space:]]*ExecStart[[:space:]]*=' deploy/xsos.service)" -eq 1
           grep -Fx \
-            'ExecStart=/opt/isarmg/xsos/current/bin/xsos run --release-root /opt/isarmg/xsos/current' \
+            'ExecStart=/opt/isarmg/xsos/bin/xsos run --config /etc/isarmg/xsos/config.json' \
             deploy/xsos.service
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy

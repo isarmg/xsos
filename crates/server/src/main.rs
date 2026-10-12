@@ -1,10 +1,10 @@
 use anyhow::Context as _;
 use clap::Parser;
 use xsos::{
-    config::{Cli, Command, ConfigCommand},
+    config::{AdminCommand, Cli, Command, ConfigCommand},
     database_lock::{ApplicationLock, MaintenanceLock},
     http::{AppState, product_descriptor, router},
-    release_bundle, release_contract,
+    release_bundle,
     retention::RetentionMaintenance,
     store,
     telemetry::TelemetryWriter,
@@ -78,31 +78,37 @@ async fn query_status(bind: std::net::SocketAddr, json: bool) -> anyhow::Result<
 }
 
 async fn execute(mut cli: Cli) -> anyhow::Result<()> {
-    cli.config = cli
-        .config
-        .as_deref()
-        .map(xsos::config::normalize_config_path)
-        .transpose()?;
+    if !matches!(
+        &cli.command,
+        Command::Identity | Command::WebAssets | Command::VerifyRelease(_)
+    ) {
+        cli.config = xsos::config::selected_config_path(cli.config.as_deref())?;
+    }
     xsos::release_contract::ensure_supported_runtime()?;
     xcss::server_runtime::install_panic_hook();
-    initialize_logging()?;
     let configuration = || {
         xsos::config::ValidatedConfig::from_sources(
             cli.config.as_deref(),
             cli.data_dir.as_deref(),
             cli.bind,
+            cli.development,
         )
     };
+    let config = match &cli.command {
+        Command::Identity | Command::WebAssets | Command::VerifyRelease(_) => None,
+        _ => Some(configuration()?),
+    };
+    initialize_logging(
+        config
+            .as_ref()
+            .map_or("info", |config| config.log_level.as_str()),
+    )?;
     match cli.command {
-        Command::Init => {
-            let config = configuration()?;
-            let password = config
-                .bootstrap_admin_password
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("bootstrap_admin_password is required for init"))?;
-            xcss::admin_auth::validate_password(password)?;
-            xcss::server_cli::runtime_allowed(&config.data_dir)
-                .map_err(xcss::server_cli::CliError)?;
+        Command::Init { username } => {
+            let config = config.expect("command requires configuration");
+            let username = store::normalize_username(&username)?;
+            let password = read_password_from_stdin()?;
+            xcss::admin_auth::validate_password(&password)?;
             xcss::server_cli::create_empty_private_directory(&config.data_dir)
                 .map_err(xcss::server_cli::CliError)?;
             let directory = xcss::state_file::PrivateStateDirectory::open(&config.data_dir)?;
@@ -118,9 +124,10 @@ async fn execute(mut cli: Cli) -> anyhow::Result<()> {
                 !database.try_exists()?,
                 "database already exists; init never overwrites existing data"
             );
+            let _database_lock = MaintenanceLock::exclusive(&config.database_url)?;
+            xsos::secrets::initialize(&config.data_dir)?;
             let pool = store::open_or_initialize(&config.database_url).await?;
-            store::ensure_admin_user(&pool, &config.bootstrap_admin_username, Some(password))
-                .await?;
+            store::ensure_admin_user(&pool, &username, Some(&password)).await?;
             xcss::sqlite::checkpoint(&pool).await?;
             pool.close().await;
             tracing::info!(event = "common.initialization.completed");
@@ -129,57 +136,29 @@ async fn execute(mut cli: Cli) -> anyhow::Result<()> {
                 serde_json::json!({"status":"initialized", "ready":false})
             );
         }
-        Command::Run { release_root } => {
-            let release_root = release_root
-                .as_deref()
-                .map(release_bundle::resolve_run_root)
-                .transpose()?;
-            if let Some(root) = &release_root {
-                release_bundle::verify_release(root)?;
-            } else {
-                anyhow::ensure!(
-                    !release_contract::BinaryIdentity::current()?.is_release_bound(),
-                    "source-bound release binaries require run --release-root"
-                );
-            }
-            serve_with_config(configuration()?, release_root.as_deref()).await?;
+        Command::Run => {
+            serve_with_config(config.expect("run requires configuration")).await?;
         }
         Command::Config {
             command: ConfigCommand::Validate,
         } => {
-            let config = configuration()?;
-            validate_existing_configuration(&config).await?;
+            let config = config.expect("command requires configuration");
             println!(
                 "{}",
                 serde_json::json!({"status":"valid", "state_paths":std::iter::once(config.data_dir.clone()).chain(cli.config.as_ref().map(|path| path.canonicalize()).transpose()?).collect::<Vec<_>>(), "sources":config.sources, "schema_identity":xsos::database_schema::expected_identity()?})
             );
         }
         Command::Status => {
-            query_status(configuration()?.bind, cli.json).await?;
+            query_status(
+                config.expect("status requires configuration").bind,
+                cli.json,
+            )
+            .await?;
         }
-        Command::AdminResetPassword(args) => {
-            let database = xsos::database_schema::database_path(&args.database_url)?;
-            let directory =
-                xcss::state_file::PrivateStateDirectory::open(database.parent().unwrap())?;
-            xcss::server_cli::runtime_allowed(directory.path())
-                .map_err(xcss::server_cli::CliError)?;
-            let _common_lock = directory.try_maintenance_lock()?;
-            xcss::server_cli::runtime_allowed(directory.path())
-                .map_err(xcss::server_cli::CliError)?;
-            xsos::database_schema::validate_configuration_database(&args.database_url)?;
-            let maintenance = MaintenanceLock::exclusive(&args.database_url)?;
-            let pool =
-                xsos::database_schema::open_validated_location(&maintenance.database_url()).await?;
-            let username = store::normalize_username(&args.username)?;
-            let password = read_password_from_stdin()?;
-            store::reset_admin_password(&pool, &username, &password).await?;
-            println!(
-                "{{\"status\":\"password-reset\",\"username\":{:?}}}",
-                username
-            );
-        }
-        Command::Doctor => {
-            let config = configuration()?;
+        Command::Admin {
+            command: AdminCommand::ResetPassword { username },
+        } => {
+            let config = config.expect("admin requires configuration");
             let directory = xcss::state_file::PrivateStateDirectory::open(&config.data_dir)?;
             xcss::server_cli::runtime_allowed(directory.path())
                 .map_err(xcss::server_cli::CliError)?;
@@ -188,50 +167,39 @@ async fn execute(mut cli: Cli) -> anyhow::Result<()> {
                 .map_err(xcss::server_cli::CliError)?;
             xsos::database_schema::validate_configuration_database(&config.database_url)?;
             let maintenance = MaintenanceLock::exclusive(&config.database_url)?;
+            validate_existing_configuration(&config).await?;
             let pool =
                 xsos::database_schema::open_validated_location(&maintenance.database_url()).await?;
-            let database_ready = store::ready(&pool).await;
-            let retention_ready = store::retention_ready(&pool).await;
-            let integrity_ready = match xcss::sqlite::integrity_check(&pool).await {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::warn!(%error, "xsos doctor integrity check failed");
-                    false
-                }
-            };
-            let foreign_keys_ready = match xcss::sqlite::foreign_key_check(&pool).await {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::warn!(%error, "xsos doctor foreign-key check failed");
-                    false
-                }
-            };
-            let secrets = xsos::crypto::SecretBox::new(config.client_authorization_key);
-            let encrypted_values_ready = store::validate_invite_authorizations(&pool, &secrets)
-                .await
-                .is_ok();
+            let username = store::normalize_username(&username)?;
+            let password = read_password_from_stdin()?;
+            store::reset_admin_password(&pool, &username, &password).await?;
             println!(
-                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready},\"retention_ready\":{retention_ready},\"integrity_ready\":{integrity_ready},\"foreign_keys_ready\":{foreign_keys_ready},\"encrypted_values_ready\":{encrypted_values_ready}}}",
-                if database_ready
-                    && retention_ready
-                    && integrity_ready
-                    && foreign_keys_ready
-                    && encrypted_values_ready
-                {
-                    "ok"
-                } else {
-                    "degraded"
-                },
-                config.bind
+                "{{\"status\":\"password-reset\",\"username\":{:?}}}",
+                username
             );
-            if !database_ready
-                || !retention_ready
-                || !integrity_ready
-                || !foreign_keys_ready
-                || !encrypted_values_ready
-            {
-                anyhow::bail!("database is not ready");
-            }
+        }
+        Command::Check => {
+            let config = config.expect("check requires configuration");
+            xcss::server_cli::runtime_allowed(&config.data_dir)
+                .map_err(xcss::server_cli::CliError)?;
+            validate_existing_configuration(&config).await?;
+            let directory = xcss::state_file::PrivateStateDirectory::open(&config.data_dir)?;
+            xcss::server_cli::runtime_allowed(directory.path())
+                .map_err(xcss::server_cli::CliError)?;
+            let _common_lock = directory.try_maintenance_lock()?;
+            xcss::server_cli::runtime_allowed(directory.path())
+                .map_err(xcss::server_cli::CliError)?;
+            let _maintenance = MaintenanceLock::exclusive(&config.database_url)?;
+            validate_existing_configuration(&config).await?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "ok",
+                    "initialized": true,
+                    "ready": false,
+                    "schema_identity": xsos::database_schema::expected_identity()?,
+                })
+            );
         }
         Command::WebAssets => {
             xsos::web_assets::verify()?;
@@ -248,16 +216,7 @@ async fn execute(mut cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn serve_with_config(
-    config: xsos::config::ValidatedConfig,
-    release_root: Option<&std::path::Path>,
-) -> anyhow::Result<()> {
-    if release_root.is_some() {
-        anyhow::ensure!(
-            config.static_dir.is_none(),
-            "formal releases require embedded Web assets"
-        );
-    }
+async fn serve_with_config(config: xsos::config::ValidatedConfig) -> anyhow::Result<()> {
     if config.administrator_origin
         == xcss::admin_auth::AdministratorOriginMode::LoopbackDevelopmentHttp
     {
@@ -275,14 +234,14 @@ async fn serve_with_config(
     let _common_lock = directory.try_instance_lock()?;
     xcss::server_cli::runtime_allowed(directory.path()).map_err(xcss::server_cli::CliError)?;
     let application_lock = ApplicationLock::acquire(&config.database_url)?;
-    validate_existing_configuration(&config).await?;
+    let key = validate_existing_configuration(&config).await?;
     enable_runtime_logging(&config.data_dir)?;
     tracing::info!(event = "common.config.loaded");
     xsos::database_schema::validate_configuration_database(&config.database_url)?;
     let pool =
         xsos::database_schema::open_validated_location(&application_lock.database_url()).await?;
     store::require_administrator(&pool).await?;
-    let secrets = xsos::crypto::SecretBox::new(config.client_authorization_key);
+    let secrets = xsos::crypto::SecretBox::new(key);
     store::validate_invite_authorizations(&pool, &secrets).await?;
     let (retention_status, retention_maintenance) =
         RetentionMaintenance::start(pool.clone(), config.retention);
@@ -343,7 +302,8 @@ async fn serve_with_config(
         telemetry,
         runtime_handle.clone(),
         secrets,
-    );
+    )
+    .with_trusted_proxies(config.trusted_proxies);
     tracing::info!(bind=%config.bind, "xsos server ready");
     runtime
         .serve(
@@ -384,16 +344,14 @@ fn read_password_from_stdin() -> anyhow::Result<String> {
 }
 
 static LOG_LAYER: std::sync::OnceLock<xcss::log::XcssStructuredLayer> = std::sync::OnceLock::new();
-fn initialize_logging() -> anyhow::Result<()> {
+fn initialize_logging(log_level: &str) -> anyhow::Result<()> {
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
     let layer = xcss::log::XcssStructuredLayer::new("xsos")?;
     LOG_LAYER
         .set(layer.clone())
         .map_err(|_| anyhow::anyhow!("logging already initialized"))?;
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with(log_level.parse::<tracing_subscriber::filter::LevelFilter>()?)
         .with(layer)
         .try_init()?;
     Ok(())
@@ -415,10 +373,11 @@ fn enable_runtime_logging(data_dir: &std::path::Path) -> anyhow::Result<()> {
 
 async fn validate_existing_configuration(
     config: &xsos::config::ValidatedConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<[u8; 32]> {
     xcss::server_cli::validate_runtime_log_directory(&config.data_dir)
         .map_err(xcss::server_cli::CliError)?;
     xcss::state_file::PrivateStateDirectory::open(&config.data_dir)?;
+    let key = xsos::secrets::load(&config.data_dir)?;
     let snapshot = xsos::database_schema::validation_snapshot(
         xsos::database_schema::database_path(&config.database_url)?,
     )
@@ -427,11 +386,8 @@ async fn validate_existing_configuration(
     xcss::sqlite::integrity_check(snapshot.pool()).await?;
     xcss::sqlite::foreign_key_check(snapshot.pool()).await?;
     store::require_administrator(snapshot.pool()).await?;
-    store::validate_invite_authorizations(
-        snapshot.pool(),
-        &xsos::crypto::SecretBox::new(config.client_authorization_key),
-    )
-    .await?;
+    store::validate_invite_authorizations(snapshot.pool(), &xsos::crypto::SecretBox::new(key))
+        .await?;
     snapshot.close().await;
-    Ok(())
+    Ok(key)
 }

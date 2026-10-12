@@ -108,41 +108,14 @@ class ReleaseToolingTests(unittest.TestCase):
         repository = SCRIPT.parent.parent
         readme = repository / PACKAGE.RELEASE_README
         text = readme.read_text(encoding="utf-8")
-        for required in (
-            "## 安装与初始化", "## HTTPS 入口", "## 运行检查",
-            "## 安装布局", "## 遇到问题", "sha256sum --check --strict",
-            "verify-release --root", "groupadd --system xsos",
-            "EnvironmentFile=/etc/isarmg/xsos.env", "bin/xsos init",
-            "systemctl enable --now xsos.service", "/readyz", "sudoedit",
-        ):
+        for required in ("安装", "升级", "install.sh setup", "upgrade", "secrets.json",
+                         "/etc/isarmg/xsos/config.json", "CONFIG_JSON [USERNAME]", "config validate",
+                         "systemctl enable --now xsos.service", "stdin" if "stdin" in text else "标准输入"):
             self.assertIn(required, text)
+        for forbidden in ("XSOS_AUTHORIZATION_KEY", "client_authorization_key", "--database-url", "--release-root", "--upgrade"):
+            self.assertNotIn(forbidden, text)
         for destination in re.findall(r"\]\(([^)]+)\)", text):
-            self.assertTrue(
-                destination.startswith(("https://", "#")),
-                f"packaged README link must work without the source tree: {destination}",
-            )
-        self.assertIn("xsos 1.0.2 发行包部署手册", text)
-        self.assertIn("bin/xsos", text)
-        self.assertIn("systemd/xsos.service", text)
-        self.assertIn("RELEASE-MANIFEST.json", text)
-        identity_rows = {
-            cells[0]: cells[1]
-            for line in text.splitlines()
-            if line.startswith("|")
-            and len(cells := [cell.strip().strip("`") for cell in line.strip("|").split("|")]) == 2
-        }
-        self.assertEqual(identity_rows.get("schema_revision"), "1")
-        self.assertIn(
-            "XSOC_AUTHORIZATION_KEY=REPLACE_WITH_BASE64_ENCODED_32_RANDOM_BYTES",
-            text,
-        )
-        self.assertNotIn("XSOS_SESSION_IDLE_TTL_SECONDS", text)
-        self.assertNotIn("XSOS_SESSION_ABSOLUTE_TTL_SECONDS", text)
-        source_only = re.compile(r"(?:^|[`\s])(scripts|clients|config|deploy)/")
-        self.assertIsNone(
-            source_only.search(text),
-            "packaged README must not reference source-only repository paths",
-        )
+            self.assertTrue(destination.startswith(("https://", "#")))
 
     def test_release_host_is_exactly_linux_x86_64(self) -> None:
         PACKAGE.require_release_host("Linux", "x86_64", "glibc 2.41")

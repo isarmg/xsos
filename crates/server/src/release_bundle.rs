@@ -211,7 +211,8 @@ fn parse_entries(entries: &[ReleaseEntry]) -> anyhow::Result<HashMap<PathBuf, Re
                 ensure!(mode == 0o555, "release directories must have mode 0555")
             }
             ReleaseEntry::File { size, sha256, .. } => {
-                let required_mode = if entry.path() == SERVER_BINARY {
+                let required_mode = if entry.path() == SERVER_BINARY || entry.path() == "install.sh"
+                {
                     0o555
                 } else {
                     0o444
@@ -233,10 +234,13 @@ fn parse_entries(entries: &[ReleaseEntry]) -> anyhow::Result<HashMap<PathBuf, Re
 }
 
 fn validate_exact_layout(expected: &HashMap<PathBuf, ReleaseEntry>) -> anyhow::Result<()> {
-    const DIRECTORIES: [&str; 2] = ["bin", "systemd"];
-    const FILES: [&str; 4] = [
+    const DIRECTORIES: [&str; 3] = ["bin", "config", "systemd"];
+    const FILES: [&str; 7] = [
         "README.md",
         "bin/xsos",
+        "config/xsos.env.example",
+        "config/xsos.json.example",
+        "install.sh",
         "systemd/xsos.service",
         "web-assets.json",
     ];
@@ -251,7 +255,7 @@ fn validate_exact_layout(expected: &HashMap<PathBuf, ReleaseEntry>) -> anyhow::R
         );
     }
     for file in FILES {
-        let expected_mode = if file.starts_with("bin/") {
+        let expected_mode = if file.starts_with("bin/") || file == "install.sh" {
             "0555"
         } else {
             "0444"
@@ -514,11 +518,11 @@ mod tests {
         fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("releases").join(APPLICATION_VERSION);
-            for directory in ["bin", "systemd"] {
+            for directory in ["bin", "config", "systemd"] {
                 fs::create_dir_all(root.join(directory)).unwrap();
             }
             let mut entries = Vec::new();
-            for directory in ["bin", "systemd"] {
+            for directory in ["bin", "config", "systemd"] {
                 entries.push(ReleaseEntry::Directory {
                     path: directory.to_owned(),
                     mode: "0555".to_owned(),
@@ -527,6 +531,13 @@ mod tests {
             for (path, bytes, mode) in [
                 ("README.md", b"current release".as_slice(), "0444"),
                 ("bin/xsos", b"current binary".as_slice(), "0555"),
+                (
+                    "config/xsos.env.example",
+                    b"XSOS_DEVELOPMENT=false".as_slice(),
+                    "0444",
+                ),
+                ("config/xsos.json.example", b"{}".as_slice(), "0444"),
+                ("install.sh", b"#!/bin/sh".as_slice(), "0555"),
                 ("systemd/xsos.service", b"[Service]".as_slice(), "0444"),
                 (
                     "web-assets.json",
@@ -547,7 +558,7 @@ mod tests {
                     sha256: encode_hex(&Sha256::digest(bytes)),
                 });
             }
-            for directory in ["bin", "systemd"] {
+            for directory in ["bin", "config", "systemd"] {
                 fs::set_permissions(root.join(directory), fs::Permissions::from_mode(0o555))
                     .unwrap();
             }
@@ -580,7 +591,7 @@ mod tests {
                 return;
             }
             fs::set_permissions(&self.root, fs::Permissions::from_mode(0o755)).unwrap();
-            for directory in ["bin", "systemd"] {
+            for directory in ["bin", "config", "systemd"] {
                 fs::set_permissions(self.root.join(directory), fs::Permissions::from_mode(0o755))
                     .unwrap();
             }
@@ -608,7 +619,7 @@ mod tests {
         let fixture = Fixture::new();
         let report = verify_release_with_options(&fixture.root, false, false).unwrap();
         assert_eq!(report.application, APPLICATION);
-        assert_eq!(report.files, 4);
+        assert_eq!(report.files, 7);
     }
 
     #[test]
@@ -748,121 +759,5 @@ mod tests {
         if BinaryIdentity::current().unwrap().source_revision == "unbound" {
             assert!(verify_release_with_options(&fixture.root, false, true).is_err());
         }
-    }
-}
-
-/// Resolve the single deployment pointer only for `run`; release verification
-/// and all files inside the immutable release still require physical paths.
-pub fn resolve_run_root(root: &Path) -> anyhow::Result<PathBuf> {
-    ensure!(
-        root.is_absolute()
-            && root
-                .components()
-                .all(|part| matches!(part, Component::RootDir | Component::Normal(_))),
-        "release root must be a normalized absolute path"
-    );
-    let before = fs::symlink_metadata(root)?;
-    if !before.is_symlink() {
-        validate_release_root(root)?;
-        ensure!(
-            fs::canonicalize(root)?.as_os_str() == root.as_os_str(),
-            "release root must use its exact physical spelling"
-        );
-        return Ok(root.to_path_buf());
-    }
-    ensure!(
-        root.ends_with("opt/isarmg/xsos/current"),
-        "unsupported release pointer"
-    );
-    let installation = root
-        .parent()
-        .context("release installation parent is required")?;
-    ensure!(
-        fs::canonicalize(installation)?.as_os_str() == installation.as_os_str(),
-        "release pointer parent must be physical"
-    );
-    ensure!(
-        root.as_os_str() == installation.join("current").as_os_str(),
-        "release pointer must use its exact installation spelling"
-    );
-    let owner = fs::symlink_metadata(installation)?;
-    ensure!(
-        owner.is_dir() && owner.mode() & 0o7777 == 0o755,
-        "release installation must be a physical directory with mode 0755"
-    );
-    let releases = installation.join("releases");
-    let release_parent = fs::symlink_metadata(&releases)?;
-    ensure!(
-        release_parent.is_dir()
-            && !release_parent.is_symlink()
-            && release_parent.mode() & 0o7777 == 0o755
-            && release_parent.uid() == owner.uid()
-            && fs::canonicalize(&releases)?.as_os_str() == releases.as_os_str(),
-        "releases directory must be physical, owned by the installation owner, and mode 0755"
-    );
-    ensure!(
-        before.uid() == owner.uid(),
-        "release pointer owner differs from the installation"
-    );
-    let expected = releases.join(APPLICATION_VERSION);
-    let target = fs::read_link(root)?;
-    ensure!(
-        target.as_os_str() == expected.as_os_str(),
-        "release pointer must target the exact absolute current-version release"
-    );
-    ensure!(
-        fs::canonicalize(root)?.as_os_str() == expected.as_os_str(),
-        "release pointer target must be physical"
-    );
-    validate_release_root(&expected)?;
-    ensure!(
-        fs::symlink_metadata(&expected)?.uid() == owner.uid(),
-        "release owner differs from the installation"
-    );
-    let after = fs::symlink_metadata(root)?;
-    ensure!(
-        before.dev() == after.dev()
-            && before.ino() == after.ino()
-            && before.uid() == after.uid()
-            && before.ctime() == after.ctime()
-            && before.ctime_nsec() == after.ctime_nsec()
-            && fs::read_link(root)?.as_os_str() == target.as_os_str(),
-        "release pointer changed during validation"
-    );
-    Ok(expected)
-}
-
-#[cfg(test)]
-mod run_pointer_tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-    #[test]
-    fn current_is_the_only_owned_physical_current_version_pointer() {
-        let temporary = tempfile::tempdir().unwrap();
-        let installation = temporary.path().join("opt/isarmg/xsos");
-        let releases = installation.join("releases");
-        let physical = releases.join(APPLICATION_VERSION);
-        fs::create_dir_all(&physical).unwrap();
-        fs::set_permissions(&installation, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&releases, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&physical, fs::Permissions::from_mode(0o555)).unwrap();
-        let current = installation.join("current");
-        symlink(&physical, &current).unwrap();
-        assert_eq!(resolve_run_root(&current).unwrap(), physical);
-        assert!(resolve_run_root(&installation.join("./current")).is_err());
-        let alias = installation.join("alias");
-        symlink(&physical, &alias).unwrap();
-        assert!(resolve_run_root(&alias).is_err());
-        fs::remove_file(&current).unwrap();
-        symlink(releases.join("0.0.0"), &current).unwrap();
-        assert!(resolve_run_root(&current).is_err());
-        fs::remove_file(&current).unwrap();
-        symlink(&physical, &current).unwrap();
-        fs::set_permissions(&installation, fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(resolve_run_root(&current).is_err());
-        fs::set_permissions(&installation, fs::Permissions::from_mode(0o755)).unwrap();
-        let linked_parent = temporary.path().join("linked-parent");
-        symlink(&installation, &linked_parent).unwrap();
-        assert!(resolve_run_root(&linked_parent.join("current")).is_err());
     }
 }

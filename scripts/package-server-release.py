@@ -168,21 +168,14 @@ def expect_rejection(
 
 def verify_bound_command_boundary(root: Path, temporary: Path) -> None:
     binary = root / "bin/xsos"
-    expect_rejection(
-        [os.fspath(binary), "run"],
-        b"source-bound release binaries require run --release-root",
-        cwd=Path("/"),
-    )
-
     other_web = temporary / "wrong-static-web"
     other_web.mkdir()
-    database = temporary / "wrong-static.db"
+    database = temporary / "wrong-static-state" / "xsos.sqlite3"
     environment = os.environ.copy()
     environment.update(
         {
-            "XSOS_DATABASE_URL": f"sqlite://{database}",
-            "XSOC_AUTHORIZATION_KEY": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
-            "XCSS_DEV_WEB_DIR": os.fspath(other_web),
+            "XSOS_DATA_DIR": str(database.parent),
+            "XSOS_DEVELOPMENT_WEB_DIR": os.fspath(other_web),
             "XSOS_BIND": "127.0.0.1:0",
             "XSOS_DEVELOPMENT": "true",
         }
@@ -191,8 +184,6 @@ def verify_bound_command_boundary(root: Path, temporary: Path) -> None:
         [
             os.fspath(binary),
             "run",
-            "--release-root",
-            os.fspath(root),
         ],
         b"directory Web assets are allowed only in an unbound development build",
         cwd=Path("/"),
@@ -231,7 +222,7 @@ def server_is_ready(port: int) -> bool:
 
 
 def relocated_smoke(extracted: Path, temporary: Path) -> None:
-    state = temporary / "smoke-state/db"
+    state = temporary / "smoke-state"
     state.mkdir(parents=True, mode=0o700)
     state.chmod(0o700)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -240,30 +231,25 @@ def relocated_smoke(extracted: Path, temporary: Path) -> None:
     environment = os.environ.copy()
     environment.update(
         {
-            "XSOS_DATABASE_URL": f"sqlite://{state / 'app.db'}",
-            "XSOC_AUTHORIZATION_KEY": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
             "XSOS_BIND": f"127.0.0.1:{port}",
-            "XSOS_DEVELOPMENT": "true",
-            "XSOS_BOOTSTRAP_ADMIN_USERNAME": "release-smoke",
-            "XSOS_BOOTSTRAP_ADMIN_PASSWORD": "release-smoke-password",
+            "XSOS_DEVELOPMENT": "false",
+            "XSOS_DATA_DIR": os.fspath(state),
         }
     )
-    subprocess.run([os.fspath(extracted / "bin/xsos"), "init", "--json"],
-        cwd=Path("/"), env=environment, stdin=subprocess.DEVNULL,
+    subprocess.run([os.fspath(extracted / "bin/xsos"), "init", "--username", "release-smoke", "--json"],
+        cwd=Path("/"), env=environment, input=b"release-smoke-password\n",
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    installation = extracted.parent.parent
-    installation.chmod(0o755)
-    extracted.parent.chmod(0o755)
-    pointer = installation / "current"
-    pointer.symlink_to(extracted)
+    # A source-bound release binary runs after an ordinary single-file install.
+    installed = temporary / "ordinary-install/bin/xsos"
+    installed.parent.mkdir(parents=True)
+    shutil.copyfile(extracted / "bin/xsos", installed)
+    installed.chmod(0o755)
     log_path = temporary / "relocated-smoke.log"
     with log_path.open("wb") as log:
         process = subprocess.Popen(
             [
-                os.fspath(extracted / "bin/xsos"),
+                os.fspath(installed),
                 "run",
-                "--release-root",
-                os.fspath(pointer),
             ],
             cwd=Path("/"),
             env=environment,
@@ -372,7 +358,7 @@ def main() -> None:
         releases = temporary / "releases"
         root = releases / VERSION
         web_stage = temporary / "web"
-        for directory in [root / "bin", root / "systemd", web_stage]:
+        for directory in [root / "bin", root / "config", root / "systemd", web_stage]:
             directory.mkdir(parents=True, exist_ok=False)
 
         run(["npm", "ci"], cwd=source / "web")
@@ -404,12 +390,15 @@ def main() -> None:
             root / "systemd/xsos.service",
         )
         shutil.copyfile(source / RELEASE_README, root / "README.md")
+        shutil.copyfile(source / "install.sh", root / "install.sh")
+        for name in ("xsos.json.example", "xsos.env.example"):
+            shutil.copyfile(source / "config" / name, root / "config" / name)
         inventory = run([os.fspath(built_binary), "web-assets"], cwd=source, capture=True).stdout
         if not inventory.endswith(b"\n"):
             fail("compiled Web inventory must be one newline-terminated JSON document")
         (root / "web-assets.json").write_bytes(inventory[:-1])
 
-        executable_paths = [root / "bin/xsos"]
+        executable_paths = [root / "bin/xsos", root / "install.sh"]
         for path in executable_paths:
             path.chmod(0o555)
         for path in root.rglob("*"):

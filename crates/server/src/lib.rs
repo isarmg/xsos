@@ -11,6 +11,7 @@ mod pairing_admission;
 pub mod release_bundle;
 pub mod release_contract;
 pub mod retention;
+pub mod secrets;
 pub mod store;
 pub mod telemetry;
 

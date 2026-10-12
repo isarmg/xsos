@@ -214,11 +214,8 @@ mod platform {
         ensure!(!value.is_empty(), "SQLite database path must not be empty");
         ensure!(value != ":memory:", "in-memory databases cannot be locked");
         ensure!(
-            !value.contains('?')
-                && !value.contains('#')
-                && !value.contains('%')
-                && !value.contains('\0'),
-            "database locks require a plain, unescaped SQLite file URL without query or fragment"
+            !value.contains('\0'),
+            "SQLite database path must not contain NUL"
         );
         let database = PathBuf::from(value);
         let absolute = if database.is_absolute() {

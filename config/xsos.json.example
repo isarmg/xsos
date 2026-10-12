@@ -1,0 +1,7 @@
+{
+  "bind": "127.0.0.1:18105",
+  "data_dir": "/var/lib/isarmg/xsos",
+  "development": false,
+  "log_level": "info",
+  "trusted_proxies": []
+}

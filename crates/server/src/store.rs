@@ -64,7 +64,7 @@ pub async fn ensure_admin_user(
     if service.store().administrator_count().await? == 0 {
         let password = password.ok_or_else(|| {
             anyhow::anyhow!(
-                "XSOS_BOOTSTRAP_ADMIN_PASSWORD is required while no administrators exist"
+                "administrator password from stdin is required for explicit initialization"
             )
         })?;
         service

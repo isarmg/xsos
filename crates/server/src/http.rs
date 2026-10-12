@@ -1,15 +1,17 @@
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
+use xcss::client_ip::{ClientIp, TrustedProxies};
 use xcss::server_cli::{ContractJson, ContractPath, ContractQuery};
+#[cfg(test)]
+use {axum::extract::ConnectInfo, std::net::SocketAddr};
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, DefaultBodyLimit, Extension, Request, State},
+    extract::{DefaultBodyLimit, Extension, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -48,6 +50,7 @@ pub struct AppState {
     pub secrets: crate::crypto::SecretBox,
     administrator: Arc<AdministratorService<SqliteAdministratorStore>>,
     administrator_origin: AdministratorOriginMode,
+    trusted_proxies: TrustedProxies,
     runtime: xcss::server_runtime::RuntimeHandle,
     pairing_admission: crate::pairing_admission::PairingAdmission,
     report_buckets: Arc<Mutex<ReportBuckets>>,
@@ -109,6 +112,7 @@ impl AppState {
             secrets,
             administrator,
             administrator_origin,
+            trusted_proxies: TrustedProxies::parse(&[]).expect("empty proxy trust is valid"),
             runtime,
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
             report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
@@ -117,6 +121,11 @@ impl AppState {
             #[cfg(test)]
             _telemetry_task: None,
         }
+    }
+
+    pub fn with_trusted_proxies(mut self, trusted_proxies: TrustedProxies) -> Self {
+        self.trusted_proxies = trusted_proxies;
+        self
     }
 
     #[cfg(test)]
@@ -336,6 +345,7 @@ pub fn router(state: AppState, static_dir: impl Into<Option<PathBuf>>) -> anyhow
             post(activate_capability),
         )
         .layer(DefaultBodyLimit::max(CLIENT_REPORT_MAX_BODY_BYTES));
+    let trusted_proxies = state.trusted_proxies.clone();
     let product = console.merge(client).with_state(state);
     Ok(Router::new()
         .merge(platform)
@@ -365,6 +375,10 @@ pub fn router(state: AppState, static_dir: impl Into<Option<PathBuf>>) -> anyhow
             )
         })
         .method_not_allowed_fallback(|| async { Error::MethodNotAllowed })
+        .layer(middleware::from_fn_with_state(
+            trusted_proxies,
+            xcss::client_ip::middleware,
+        ))
         .layer(axum::middleware::from_fn(log_request))
         .layer(middleware::from_fn(
             xcss::server_cli::request_context_middleware,
@@ -568,13 +582,13 @@ async fn delete_instance(
 
 async fn create_pairing(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractJson(request): ContractJson<ClientPairingRequest>,
 ) -> Result<Response> {
     validate_pairing(&request)?;
     state
         .pairing_admission
-        .check_create(peer.ip(), &request.host.id)?;
+        .check_create(source, &request.host.id)?;
     match store::create_pairing(&state.pool, &request)
         .await
         .map_err(database)?
@@ -622,11 +636,11 @@ async fn create_pairing(
 
 async fn pairing_public(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractPath(id): ContractPath<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
-    state.pairing_admission.check_poll(peer.ip(), id)?;
+    state.pairing_admission.check_poll(source, id)?;
     let value = store::pairing_public(&state.pool, id)
         .await
         .map_err(database)?
@@ -640,12 +654,12 @@ async fn pairing_public(
 
 async fn pairing_status(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(ClientIp(source)): Extension<ClientIp>,
     headers: HeaderMap,
     ContractPath(id): ContractPath<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
-    state.pairing_admission.check_poll(peer.ip(), id)?;
+    state.pairing_admission.check_poll(source, id)?;
     let secret = authorization(&headers, "pairing").ok_or(Error::Unauthorized)?;
     if !(32..=256).contains(&secret.len()) || secret.chars().any(char::is_whitespace) {
         return Err(Error::Unauthorized);
@@ -677,22 +691,22 @@ async fn pairing_status(
 
 async fn activate_admin(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(ClientIp(source)): Extension<ClientIp>,
     Extension(principal): Extension<Principal>,
     ContractJson(request): ContractJson<ActivateClientRequest>,
 ) -> Result<Response> {
     state
         .pairing_admission
         .check_invite_account(&principal.subject)?;
-    activate(&state, peer.ip(), request, &principal.subject).await
+    activate(&state, source, request, &principal.subject).await
 }
 
 async fn activate_capability(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractJson(request): ContractJson<ActivateClientRequest>,
 ) -> Result<Response> {
-    activate(&state, peer.ip(), request, "client-capability").await
+    activate(&state, source, request, "client-capability").await
 }
 
 async fn activate(
@@ -1229,6 +1243,7 @@ mod tests {
 
     async fn app_with_pairing_admission(
         pairing_admission: crate::pairing_admission::PairingAdmission,
+        trusted_proxies: &[String],
     ) -> Router {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1241,7 +1256,8 @@ mod tests {
                 pool,
                 AdministratorOriginMode::LoopbackDevelopmentHttp,
                 pairing_admission,
-            ),
+            )
+            .with_trusted_proxies(TrustedProxies::parse(trusted_proxies).unwrap()),
             test_static_dir(),
         )
         .unwrap()
@@ -1665,7 +1681,7 @@ mod tests {
             8,
             std::time::Duration::from_secs(300),
         );
-        let app = app_with_pairing_admission(admission).await;
+        let app = app_with_pairing_admission(admission, &[]).await;
         let first = app
             .clone()
             .oneshot(pairing_request(
@@ -1703,6 +1719,49 @@ mod tests {
         assert_eq!(envelope.message, "pairing source rate exceeded");
         assert!(envelope.retryable);
         assert_eq!(envelope.details["retry_after_seconds"], 60);
+    }
+
+    #[tokio::test]
+    async fn pairing_limits_use_common_client_ip_only_for_explicitly_trusted_proxies() {
+        for trusted in [false, true] {
+            let admission = crate::pairing_admission::PairingAdmission::for_test(
+                1,
+                8,
+                std::time::Duration::from_secs(300),
+            );
+            let proxies = if trusted {
+                vec!["192.0.2.0/24".to_owned()]
+            } else {
+                vec![]
+            };
+            let app = app_with_pairing_admission(admission, &proxies).await;
+            for (index, forwarded) in ["198.51.100.10", "198.51.100.11", "198.51.100.10"]
+                .into_iter()
+                .enumerate()
+            {
+                let mut request = pairing_request(
+                    uuid::Uuid::new_v4(),
+                    "192.0.2.50:41000",
+                    ['a', 'd', 'e'][index],
+                    xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
+                    env!("CARGO_PKG_VERSION"),
+                );
+                request
+                    .headers_mut()
+                    .insert("x-forwarded-for", forwarded.parse().unwrap());
+                let response = app.clone().oneshot(request).await.unwrap();
+                let expected = if index == 0 || (trusted && index == 1) {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                };
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "trusted={trusted}, request={index}"
+                );
+            }
+        }
     }
 
     #[test]

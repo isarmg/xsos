@@ -302,11 +302,8 @@ pub fn database_path(database_url: &str) -> anyhow::Result<PathBuf> {
         "in-memory database files are unsupported"
     );
     ensure!(
-        !value.contains('?')
-            && !value.contains('#')
-            && !value.contains('%')
-            && !value.contains('\0'),
-        "database requires a plain, unescaped SQLite file URL without query or fragment"
+        !value.contains('\0'),
+        "SQLite database path must not contain NUL"
     );
     Ok(PathBuf::from(value))
 }

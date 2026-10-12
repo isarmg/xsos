@@ -32,19 +32,14 @@ fn server_command() -> Command {
     command
 }
 
-fn configured_command(directory: &Path, url: &str, static_dir: &Path) -> Command {
+fn configured_command(directory: &Path, static_dir: &Path) -> Command {
     let mut command = server_command();
     command
         .args(["--json", "--data-dir"])
         .arg(directory)
         .current_dir(directory)
-        .env("XSOS_DATABASE_URL", url)
-        .env("XCSS_DEV_WEB_DIR", static_dir)
-        .env("XSOS_DEVELOPMENT", "true")
-        .env(
-            "XSOC_AUTHORIZATION_KEY",
-            "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
-        );
+        .env("XSOS_DEVELOPMENT_WEB_DIR", static_dir)
+        .env("XSOS_DEVELOPMENT", "true");
     command
 }
 
@@ -66,7 +61,7 @@ async fn close_workers(pool: &sqlx::SqlitePool) {
 async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
     let directory = tempfile::tempdir().expect("create database directory");
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let database = directory.path().join("app.sqlite3");
+    let database = directory.path().join("xsos.sqlite3");
     let url = database_url(&database);
     let static_dir = directory.path().join("static");
     std::fs::create_dir(&static_dir).unwrap();
@@ -77,6 +72,7 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
     // Current CLI configuration has an absolute database authority, independent
     // of the child process working directory. Both lock protocols cover it.
     xcss::server_cli::create_runtime_log_directory(directory.path()).unwrap();
+    xsos::secrets::initialize(directory.path()).unwrap();
     let state_directory = xcss::state_file::PrivateStateDirectory::open(directory.path()).unwrap();
     let common = state_directory.try_instance_lock().unwrap();
     let application = ApplicationLock::acquire(&url).expect("acquire application lock");
@@ -120,7 +116,7 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         "SHM was not created beside the configured database"
     );
 
-    let validation = configured_command(directory.path(), &url, &static_dir)
+    let validation = configured_command(directory.path(), &static_dir)
         .args(["config", "validate"])
         .output()
         .expect("run read-only current configuration validation");
@@ -141,16 +137,16 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         serde_json::to_value(xsos::database_schema::expected_identity().unwrap()).unwrap()
     );
 
-    // Doctor is an offline diagnostic, whereas config validate is read-only.
-    let doctor = configured_command(directory.path(), &url, &static_dir)
-        .arg("doctor")
+    // Check is an offline diagnostic, whereas config validate is read-only.
+    let checked = configured_command(directory.path(), &static_dir)
+        .arg("check")
         .output()
-        .expect("run offline doctor while the runtime lock is held");
-    assert!(!doctor.status.success());
-    let doctor: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
-    assert_eq!(doctor["code"], "state.lock_busy");
+        .expect("run offline check while the runtime lock is held");
+    assert!(!checked.status.success());
+    let checked: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(checked["code"], "state.lock_busy");
 
-    let second_server = configured_command(directory.path(), &url, &static_dir)
+    let second_server = configured_command(directory.path(), &static_dir)
         .arg("run")
         .env("XSOS_BIND", "127.0.0.1:0")
         .env("XSOS_BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)

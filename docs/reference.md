@@ -62,7 +62,7 @@ primitive 验证 username 和完整 current Argon2id 参数；DDL 还要求 `ses
 密码策略双层 fail-closed。数据库/
 父目录/锁的
 链接、特殊文件和硬链接
-别名在 Linux 通过 `openat2` 锚定检查。`doctor` 还通过 xcss 适配器执行完整
+别名在 Linux 通过 `openat2` 锚定检查。`check` 还通过 xcss 适配器执行完整
 `PRAGMA integrity_check` 与 `foreign_key_check`；失败只报告 degraded 并退出，不在产品内修库。
 
 

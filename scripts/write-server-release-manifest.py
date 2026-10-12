@@ -128,7 +128,7 @@ def main() -> None:
                 fail(f"release directory must have mode 0555: {relative}")
             entries.append({"kind": "directory", "path": relative, "mode": "0555"})
         elif stat.S_ISREG(metadata.st_mode):
-            required_mode = 0o555 if relative == "bin/xsos" else 0o444
+            required_mode = 0o555 if relative in {"bin/xsos", "install.sh"} else 0o444
             if mode != required_mode:
                 fail(f"release file has the wrong exact mode: {relative}")
             if metadata.st_nlink != 1:
