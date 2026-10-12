@@ -261,7 +261,7 @@ function MetricChartBlock({ title, unit, response, lines, loading, failure }: { 
         ? <circle key={`${line.key}-${index}`} cx={segment[0].x} cy={segment[0].y} r="0.8" fill={line.color} />
         : <polyline key={`${line.key}-${index}`} points={segment.map(({ x, y }) => `${x},${y}`).join(" ")} fill="none" stroke={line.color} vectorEffect="non-scaling-stroke" />))}
     </svg> : <p>{loading ? t("正在读取…", "Loading…") : t("暂时不可用", "Unavailable")}</p>}
-    {hasSamples && <p className="host-chart-scale">{unit === "bytes" ? t("峰值 {0}/秒", "Peak {0}/s", [formatBytes(ceiling)]) : `${t("纵轴", "Vertical axis")} ${floor.toLocaleString(getLocale())}–${ceiling.toLocaleString(getLocale())} ${unit === "percent" ? "%" : unit}`}</p>}
+    {hasSamples && <p className="host-chart-scale">{unit === "bytes" ? t("纵轴 0–{0}/秒", "Vertical axis 0–{0}/s", [formatBytes(ceiling)]) : `${t("纵轴", "Vertical axis")} ${floor.toLocaleString(getLocale())}–${ceiling.toLocaleString(getLocale())} ${unit === "percent" ? "%" : unit}`}</p>}
   </section>;
 }
 
