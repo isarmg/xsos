@@ -596,7 +596,7 @@ try {
       const logDate = rangeEditor(page, "host-log-date");
       await logDate.expectValue("2032-12-31");
       await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(50);
-      await expect(page.getByRole("table")).toContainText("2032-12-31 09:00:00 +08:00");
+      await expect(page.getByRole("table")).toContainText("2032-12-31T01:00:00Z");
       const logPages = page.getByRole("navigation", { name: "日志分页", exact: true });
       await logPages.getByRole("button", { name: "下一页" }).click();
       await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(1);
@@ -618,8 +618,8 @@ try {
       await expect(logPages.getByRole("button", { name: "上一页" })).toBeDisabled();
       releaseReports();
       await page.waitForTimeout(200);
-      await expect(page.getByRole("table")).toContainText("2032-12-30 09:00:00 +08:00");
-      await expect(page.getByRole("table")).not.toContainText("2032-12-31 09:00:00 +08:00");
+      await expect(page.getByRole("table")).toContainText("2032-12-30T01:00:00Z");
+      await expect(page.getByRole("table")).not.toContainText("2032-12-31T01:00:00Z");
       await checkDateRangeValidation(logDate, () => reportRequested.length, "2032-12-30", "2032-12-31");
       await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(50);
       const rangeQuery = new URLSearchParams(reportRequested.at(-1));
@@ -630,7 +630,7 @@ try {
       await page.getByRole("banner").getByRole("button", { name: "刷新", exact: true }).click();
       await focusedRefresh;
       await logDate.expectValue("2032-12-30", "2032-12-31");
-      await expect(page.getByRole("table")).toContainText("2032-12-30 09:00:00 +08:00");
+      await expect(page.getByRole("table")).toContainText("2032-12-30T01:00:00Z");
       failInstanceRefresh = true;
       await page.getByRole("banner").getByRole("button", { name: "刷新", exact: true }).click();
       await expect(page.getByRole("alert")).toContainText("instance-refresh-123");
@@ -640,7 +640,7 @@ try {
       await page.getByRole("alert").getByRole("button", { name: "重试", exact: true }).click();
       await expect(page.getByRole("alert")).toHaveCount(0);
       await logDate.expectValue("2032-12-30", "2032-12-31");
-      await expect(page.getByRole("table")).toContainText("2032-12-30 09:00:00 +08:00");
+      await expect(page.getByRole("table")).toContainText("2032-12-30T01:00:00Z");
       await page.getByRole("button", { name: "详细信息", exact: true }).click();
       await deviceNavigation.waitFor();
       await expect(deviceNavigation.getByRole("button", { name: "历史趋势" })).toHaveAttribute("aria-pressed", "true");
