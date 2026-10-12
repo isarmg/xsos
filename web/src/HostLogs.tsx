@@ -63,21 +63,21 @@ export function HostLogs({ host, refreshSignal }: { host: Host; refreshSignal: n
     <div className="xcss-content-panel xcss-content-stack host-logs-panel">
       <p>{t("实例：{0}", "Instance: {0}", [host.name])}</p>
       <div className="xcss-log-date-controls">
-        <label htmlFor="host-log-date-start-year">{t("日志日期范围（服务器时区）", "Log date range (server time zone)")}</label>
+        <label htmlFor="host-log-date-start-year">{t("日志日期范围（UTC）", "Log date range (UTC)")}</label>
         <div className="xcss-actions"><Button disabled={loading || range === null || !draftValid}
           onClick={first}>{t("刷新日志", "Refresh logs")}</Button></div>
         <DateRangeField id="host-log-date" value={range} disabled={range === null && calendarFailure === null} onValidityChange={setDraftValid}
           onApply={range => { setSelection({ range, cursor: null, refreshSignal }); setLogRefresh(value => value + 1); setLogs(null); setFailure(null); setCalendarFailure(null); }} />
       </div>
     </div>
-    {range === null && !calendarFailure && <LoadingState>{t("正在读取服务器当天日期…", "Loading the server's current date…")}</LoadingState>}
-    {calendarFailure && <ErrorState requestId={calendarFailure.requestId} onRetry={() => setCalendarRefresh(value => value + 1)}>{t("无法读取服务器当天日期。", "Unable to load the server's current date.")}</ErrorState>}
+    {range === null && !calendarFailure && <LoadingState>{t("正在读取UTC 当天日期…", "Loading the current UTC date…")}</LoadingState>}
+    {calendarFailure && <ErrorState requestId={calendarFailure.requestId} onRetry={() => setCalendarRefresh(value => value + 1)}>{t("无法读取UTC 当天日期。", "Unable to load the current UTC date.")}</ErrorState>}
     {failure && <ErrorState requestId={failure.requestId} onRetry={() => setLogRefresh(value => value + 1)}>{t("无法读取上报日志。", "Unable to load report logs.")}</ErrorState>}
     {range !== null && loading && <LoadingState>{t("正在读取日志页…", "Loading the log page…")}</LoadingState>}
     {range !== null && !loading && !failure && current && (current.reports.length === 0
       ? <EmptyState>{t("所选日期范围没有上报", "No reports in the selected date range")}</EmptyState>
-      : <Table><thead><tr><th>{t("服务端接收时间", "Server receipt time")}</th><th>{t("客户端采集时间", "Client collection time")}</th><th>{t("报告 ID", "Report ID")}</th></tr></thead><tbody>
-        {current.reports.map(report => <tr key={report.report_id}><td>{report.received_at_server}</td><td>{report.collected_at_server}</td><td><code>{report.report_id}</code></td></tr>)}
+      : <Table><thead><tr><th>{t("服务端接收时间（UTC）", "Server receipt time (UTC)")}</th><th>{t("客户端采集时间（UTC）", "Client collection time (UTC)")}</th><th>{t("报告 ID", "Report ID")}</th></tr></thead><tbody>
+        {current.reports.map(report => <tr key={report.report_id}><td>{report.received_at}</td><td>{report.collected_at}</td><td><code>{report.report_id}</code></td></tr>)}
       </tbody></Table>)}
     <PageNavigation page={current} loading={loading} first={first} move={move} label={t("日志分页", "Log pages")} />
   </section>;

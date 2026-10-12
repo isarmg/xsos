@@ -66,7 +66,7 @@ curl --fail http://127.0.0.1:18105/readyz
 
 ```sh
 sudo systemctl status xsos.service --no-pager
-sudo journalctl -u xsos.service -n 100 --no-pager
+sudo journalctl --utc -u xsos.service -n 100 --no-pager
 curl --fail http://127.0.0.1:18105/readyz
 ```
 

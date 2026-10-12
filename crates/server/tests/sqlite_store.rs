@@ -750,6 +750,11 @@ async fn rotating_instance_authorization_revokes_old_credential_and_requires_new
     .await
     .unwrap()
     .unwrap();
+    let history_before: i64 = sqlx::query_scalar("SELECT count(*) FROM client_metric_reports")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(history_before > 0);
     assert!(matches!(
         store::cancel_invite(&pool, Uuid::parse_str(&invite.request_id).unwrap(), "admin")
             .await
@@ -760,8 +765,25 @@ async fn rotating_instance_authorization_revokes_old_credential_and_requires_new
         store::cancel_invite(&pool, Uuid::parse_str(&invite.request_id).unwrap(), "admin")
             .await
             .unwrap(),
-        store::CancelInviteResult::Deleted
+        store::CancelInviteResult::Cancelled
     ));
+    let retained: i64 = sqlx::query_scalar("SELECT count(*) FROM client_metric_reports")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        retained, history_before,
+        "retrying cancellation must retain the existing history"
+    );
+    assert_eq!(
+        store::list_invites(&pool, &secrets).await.unwrap().0[0].status,
+        "cancelled"
+    );
+    assert!(
+        store::delete_invite(&pool, Uuid::parse_str(&invite.request_id).unwrap(), "admin")
+            .await
+            .unwrap()
+    );
     let remaining: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM monitored_hosts) + (SELECT count(*) FROM client_credentials) + (SELECT count(*) FROM client_metric_reports) + (SELECT count(*) FROM client_metric_hourly_aggregates) + (SELECT count(*) FROM client_pairing_requests) + (SELECT count(*) FROM client_instance_invites)",
     )

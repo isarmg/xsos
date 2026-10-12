@@ -161,10 +161,11 @@ try {
           body = { host_id: reportsMatch[1], date, ...(end_date ? {end_date} : {}), ...cursors, reports: values.map(index => ({
             report_id: "038f1f4b-7a5d-7b5f-8d31-" + String(index).padStart(12, "0"),
             collected_at: `${date}T00:00:00Z`, received_at: `${date}T01:00:00Z`,
-            collected_at_server: `${date} 08:00:00 +08:00`,
-            received_at_server: `${date} 09:00:00 +08:00`,
           })) };
         } else if (historyMatch) {
+          assert.equal(url.searchParams.has("from"), false);
+          assert.equal(url.searchParams.has("to"), false);
+          assert.ok(Number(url.searchParams.get("window_seconds")) > 0);
           historyRequests++;
           if (failNextHistory) {
             failNextHistory = false;

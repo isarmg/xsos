@@ -9,8 +9,7 @@ const {
 
 const identity = index => "018f1f4b-7a5d-7b5f-8d31-" + String(index).padStart(12, "0");
 const report = index => ({ report_id: identity(index), collected_at: "2032-12-31T00:00:00Z",
-  received_at: "2032-12-31T01:00:00Z", collected_at_server: "2032-12-31 08:00:00 +08:00",
-  received_at_server: "2032-12-31 09:00:00 +08:00" });
+  received_at: "2032-12-31T01:00:00Z" });
 const page = { host_id: identity(100), date: "2032-12-31", next_cursor: "bmV4dA", previous_cursor: null,
   reports: Array.from({ length: 50 }, (_, index) => report(index)) };
 assert.equal(LIST_PAGE_SIZE, 50);

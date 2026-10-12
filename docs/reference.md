@@ -20,10 +20,10 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 | `POST /api/v1/auth/logout` | 管理员 Session + CSRF + 同源 | 无业务正文 | 撤销当前 Session、删除其 CSRF 摘要、清除 Cookie；成功响应 `204 no-store` |
 | `GET /api/v1/monitoring/hosts` | 管理员 Session | 可选 `cursor` 或 `host_id`，两者不混用 | 按实例名称字母数字顺序返回最多 50 条 Host summary、全局统计及前后游标；`host_id` 可定位单台主机；React 总览与实例/详情入口共同使用 |
 | `GET /api/v1/monitoring/hosts/{host_id}` | 管理员 Session | canonical UUID | Host summary 与可空 latest 原始报告；当前 Web 详情使用列表中的同一投影，端点供独立调用方精确读取 |
-| `GET /api/v1/monitoring/hosts/{host_id}/history` | 管理员 Session | 原始模式使用 `from/to/limit`；图表模式使用 `from/to/resolution=auto/max_points`，跨度最多 31 天、点数 100..1000 | 原始点，或在同一快照内无重复合并 raw 与 hourly 的时间桶；响应明确粒度、来源和实际对齐范围 |
+| `GET /api/v1/monitoring/hosts/{host_id}/history` | 管理员 Session | 原始模式使用 `from/to/limit`；图表模式使用 `window_seconds/resolution=auto/max_points`，Server 以同一次 UTC 时钟读取计算起止时间；固定绝对区间须同时提供 `from/to`，不能与 `window_seconds` 混用，跨度最多 31 天、点数 100..1000 | 原始点，或在同一快照内无重复合并 raw 与 hourly 的时间桶；响应明确粒度、来源和实际对齐范围 |
 | `GET/POST /api/v1/monitoring/client-instances` | 管理员 Session；POST 另需 CSRF/同源 | GET 可选 `cursor` 或 `instance_id`，两者不混用；管理路由组正文上限 16 KiB；POST exact `display_name?`，省略时使用默认名称；授权码不设有效期 | GET 返回最多 50 条实例、关联主机、可查看的授权码及前后游标；`instance_id` 可定位单个实例；新建 `201`；成功响应 `no-store` |
 | `PUT /api/v1/monitoring/client-instances/{request_id}/authorization` | 管理员 Session + CSRF + 同源 | canonical UUID；exact `authorization_code`，36 位小写英文字母或数字 | 更新加密密文/摘要、撤销旧 Client credential，并将实例恢复为 pending；Client 需重新配对 |
-| `DELETE /api/v1/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | canonical UUID；pending 首次调用转 cancelled，cancelled 再次调用永久删除 | `204`；不存在为 404，active 为 409；Web 分别显示“取消配对”和“删除实例” |
+| `DELETE /api/v1/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | canonical UUID；pending 调用转 cancelled；对 cancelled 重试保持状态与历史数据 | `204`；不存在为 404，active 为 409；永久删除仅由独立 `/delete` 路由执行 |
 | `POST /api/v1/xsoc/activate-admin` | 管理员 Session + CSRF + 同源 | 16 KiB 管理上限；exact request ID + activation code | 与 capability 激活进入同一事务；React 配对确认流程调用 |
 | `DELETE /api/v1/monitoring/managed-instances/{host_id}` | 管理员 Session + CSRF + 同源 | canonical UUID | `204`；永久级联删除关联数据 |
 | `POST /api/v1/xsoc/pairing-requests` | 未配对 Client | Client 路由组 512 KiB；strict Host、bearer/polling-secret SHA-256；来源/设备/容量限流 | 创建或幂等恢复 pairing request；返回 activation URL，成功 `no-store` |
@@ -32,8 +32,8 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 | `POST /api/v1/xsoc/activate` | 持有实例 authorization code 的 capability 调用方 | 512 KiB 组上限；来源/请求限流；不是管理员 Session | 激活同一事务状态机；授权码错误/取消/跨实例使用严格失败；短期设备请求仍有超时保护；成功 `no-store` |
 | `PATCH /api/v1/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | 实例名称 | `204`，更新名称 |
 | `DELETE /api/v1/monitoring/client-instances/{request_id}/delete` | 管理员 Session + CSRF + 同源 | canonical UUID | `204`，永久删除实例 |
-| `GET /api/v1/monitoring/logs/calendar` | 管理员 Session | 无业务正文 | 服务器时区的当前日期 |
-| `GET /api/v1/monitoring/hosts/{host_id}/reports` | 管理员 Session | date 或 start_date/end_date，加可选 cursor | 按服务器接收日期分页，每页最多 50 条，含报告 ID 和时间 |
+| `GET /api/v1/monitoring/logs/calendar` | 管理员 Session | 无业务正文 | UTC 的当前日期 |
+| `GET /api/v1/monitoring/hosts/{host_id}/reports` | 管理员 Session | date 或 start_date/end_date，加可选 cursor | 按 UTC 接收日期分页，每页最多 50 条，含报告 ID 和时间 |
 | `GET /api/v1/xsoc/credential-status` | 设备 Bearer credential | 32–256 字符凭据 | 返回 authorized、host_id、instance_id、protocol_version，no-store |
 | `POST /api/v1/xsoc/report` | `Bearer <client credential>` | 512 KiB；单份 strict report；每 Host 速率桶 | 持久事务提交后才返回 `202`；同 Host 同 ID 重放 `accepted=false` |
 

@@ -357,7 +357,6 @@ pub async fn rotate_invite_authorization(
 
 pub enum CancelInviteResult {
     Cancelled,
-    Deleted,
     NotFound,
     NotPending,
 }
@@ -380,17 +379,8 @@ pub async fn cancel_invite(
     let status = row.try_get::<String, _>("status")?;
     let instance_id: Uuid = row.try_get("instance_id")?;
     if status == "cancelled" {
-        audit(
-            &mut tx,
-            "monitoring.client_instance.invite.delete",
-            &instance_id.to_string(),
-            Some(&format!("invite_id={invite_id}")),
-            actor,
-        )
-        .await?;
-        delete_host_records(&mut tx, instance_id).await?;
-        tx.commit().await?;
-        return Ok(CancelInviteResult::Deleted);
+        tx.rollback().await?;
+        return Ok(CancelInviteResult::Cancelled);
     }
     if status != "pending" {
         tx.rollback().await?;
@@ -1416,13 +1406,95 @@ pub async fn report_logs_page(
     crate::pagination::query(pool,move |conn|Box::pin(async move {
         let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM monitored_hosts WHERE host_id=? AND lifecycle_status='active')").bind(host_id).fetch_one(&mut *conn).await?;
         if !exists{return Ok(None)};
-        let mut query=sqlx::QueryBuilder::<Sqlite>::new("SELECT report_id,CASE WHEN length(CAST(collected_at AS BLOB))>64 THEN NULL ELSE collected_at END AS collected_at,CASE WHEN length(CAST(received_at AS BLOB))>64 THEN NULL ELSE received_at END AS received_at,CASE WHEN length(CAST(received_at AS BLOB))>64 THEN '' ELSE received_at END AS sort_key FROM client_metric_reports WHERE host_id=");
-        query.push_bind(host_id).push(" AND received_at>=").push_bind(from).push(" AND received_at<").push_bind(to);
-        if let Some(key)=&cursor {query.push(" AND (received_at,report_id)").push(if key.newer {" > ("}else{" < ("}).push_bind(&key.sort).push(",").push_bind(key.id).push(")");}
-        query.push(if cursor.as_ref().is_some_and(|c|c.newer){" ORDER BY received_at,report_id"}else{" ORDER BY received_at DESC,report_id DESC"}).push(" LIMIT 51");
+        let mut query = report_log_query(host_id, from, to, cursor.as_ref());
         let rows=query.build_query_as::<ReportLogRow>().fetch_all(&mut *conn).await?;
         Ok(Some(crate::pagination::page(rows,cursor.as_ref(),&scope,|row|(row.sort_key.clone(),row.report_id))?))
     })).await
+}
+
+fn report_log_query(
+    host_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    cursor: Option<&crate::pagination::Cursor>,
+) -> sqlx::QueryBuilder<Sqlite> {
+    // Follow the existing receipt-time index in page order. The collection-time
+    // index would scan and sort all retained reports for this host before LIMIT.
+    // Qualify the raw sort column so it cannot resolve to the bounded CASE alias.
+    let mut query = sqlx::QueryBuilder::<Sqlite>::new(
+        "SELECT report_id,CASE WHEN length(CAST(collected_at AS BLOB))>64 THEN NULL ELSE collected_at END AS collected_at,CASE WHEN length(CAST(received_at AS BLOB))>64 THEN NULL ELSE received_at END AS received_at,CASE WHEN length(CAST(received_at AS BLOB))>64 THEN '' ELSE received_at END AS sort_key FROM client_metric_reports INDEXED BY client_metric_reports_received WHERE host_id=",
+    );
+    query
+        .push_bind(host_id)
+        .push(" AND client_metric_reports.received_at>=")
+        .push_bind(from)
+        .push(" AND client_metric_reports.received_at<")
+        .push_bind(to);
+    if let Some(key) = cursor {
+        query
+            .push(" AND (client_metric_reports.received_at,report_id)")
+            .push(if key.newer { " > (" } else { " < (" })
+            .push_bind(&key.sort)
+            .push(",")
+            .push_bind(key.id)
+            .push(")");
+    }
+    query
+        .push(if cursor.is_some_and(|key| key.newer) {
+            " ORDER BY client_metric_reports.received_at,report_id"
+        } else {
+            " ORDER BY client_metric_reports.received_at DESC,report_id DESC"
+        })
+        .push(" LIMIT 51");
+    query
+}
+
+#[cfg(test)]
+mod report_log_query_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn receipt_log_pages_use_the_current_index_without_sorting_all_host_history() {
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../../../schema/product.sql"))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        let host = Uuid::new_v4();
+        let from = DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let to = from + chrono::Duration::days(1);
+        let query = report_log_query(host, from, to, None);
+        let plan = format!("EXPLAIN QUERY PLAN {}", query.sql().as_ref());
+        let rows = sqlx::query(sqlx::AssertSqlSafe(plan))
+            .bind(host)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+        let details = rows
+            .iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+        assert!(
+            details
+                .iter()
+                .any(|value| value.contains("client_metric_reports_received")),
+            "{details:?}"
+        );
+        assert!(
+            !details
+                .iter()
+                .any(|value| value == "USE TEMP B-TREE FOR ORDER BY"
+                    || value.contains("host_collected")),
+            "{details:?}"
+        );
+        connection.close().await.unwrap();
+    }
 }
 
 pub async fn history_series(

@@ -82,8 +82,6 @@ export type ReportLog = {
   report_id: string;
   collected_at: string;
   received_at: string;
-  collected_at_server: string;
-  received_at_server: string;
 };
 export type ReportLogsResponse = PageCursors & { host_id: string; date: string; end_date?: string; reports: ReportLog[] };
 export type ReportLogCalendar = { today: string };
@@ -242,13 +240,9 @@ export function isReportLogsResponse(value: unknown): value is ReportLogsRespons
     && value.reports.length <= LIST_PAGE_SIZE && hasPageCursors(value)
     && new Set(value.reports.map(row => isRecord(row) ? row.report_id : undefined)).size === value.reports.length
     && value.reports.every(row => isRecordWithExactKeys(row, [
-      "report_id", "collected_at", "received_at", "collected_at_server", "received_at_server",
+      "report_id", "collected_at", "received_at",
     ]) && isUuid(row.report_id) && isUtcTimestamp(row.collected_at)
-      && isUtcTimestamp(row.received_at)
-      && typeof row.collected_at_server === "string"
-      && typeof row.received_at_server === "string"
-      && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}$/.test(row.collected_at_server)
-      && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}$/.test(row.received_at_server));
+      && isUtcTimestamp(row.received_at));
 }
 
 export function isHistorySeriesResponse(value: unknown): value is HistorySeriesResponse {

@@ -106,12 +106,11 @@ function RotateInstance({ instance, close, changed }: { instance: ClientInstance
 
 function CancelInstance({ instance, close, changed }: { instance: ClientInstance; close(): void; changed(): void }) {
   const { client } = useAdminApplication(); const action = useAction();
-  const deleting = instance.status === "cancelled";
-  return <ConfirmDangerDialog title={deleting ? t("删除实例", "Delete instance") : t("取消配对", "Cancel pairing")} description={deleting ? t("永久删除 {0} 的已取消实例信息。", "Permanently delete the cancelled instance {0}.", [instance.display_name]) : t("取消 {0} 的实例后，其密码将不可再用；取消后仍可从列表永久删除该信息。", "Cancelling instance {0} invalidates its password; the cancelled entry can then be permanently deleted from the list.", [instance.display_name])}
+  return <ConfirmDangerDialog title={t("取消配对", "Cancel pairing")} description={t("取消 {0} 的实例后，其密码将不可再用。重复取消会保留实例及历史数据；永久删除需在列表中单独确认。", "Cancelling instance {0} invalidates its password. Repeating cancellation preserves the instance and its history; permanent deletion requires a separate confirmation in the list.", [instance.display_name])}
     pending={action.pending} onClose={() => { if (action.idle()) close(); }} onConfirm={() => void action.run(async signal => {
       await client.request(`${instancesPath}/${instance.request_id}`, isNoContent, { method: "DELETE", signal });
       if (!signal.aborted) changed();
-    })}>{action.failure && <ErrorState requestId={action.failure.requestId}>{deleting ? t("删除未能确认，请刷新实例核对状态。", "Deletion could not be confirmed. Refresh and check the instance state.") : t("取消未能确认，请刷新实例核对状态。", "Cancellation could not be confirmed. Refresh and check the instance state.")}</ErrorState>}</ConfirmDangerDialog>;
+    })}>{action.failure && <ErrorState requestId={action.failure.requestId}>{t("取消未能确认，可重试取消或刷新核对状态；重试不会永久删除。", "Cancellation could not be confirmed. Retry cancellation or refresh and check its state; retries do not permanently delete it.")}</ErrorState>}</ConfirmDangerDialog>;
 }
 
 function ActivateInstance({ initialId, close, changed }: { initialId: string; close(): void; changed(): void }) {
@@ -147,7 +146,7 @@ function ActivateInstance({ initialId, close, changed }: { initialId: string; cl
         pattern="[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
         onChange={event => { setId(event.target.value); setDetails(null); }} /></FormField>
       {details && <section aria-label={t("待核对设备", "Device to verify")}><p>{t("系统：", "System:")}{details.os} / {details.arch}</p>
-        <p>{t("配对状态：", "Pairing status:")}{displayLabel(details.status)}{t("；设备请求会话截止：", "; device request session deadline:")}{new Date(details.expires_at).toLocaleString(getLocale())}{t("（不是密码有效期）", "(not the password expiry)")}</p></section>}
+        <p>{t("配对状态：", "Pairing status:")}{displayLabel(details.status)}{t("；设备请求会话截止：", "; device request session deadline:")}{`${new Date(details.expires_at).toLocaleString(getLocale(), { timeZone: "UTC", hourCycle: "h23" })} UTC`}{t("（不是密码有效期）", "(not the password expiry)")}</p></section>}
       {details?.status === "waiting" && <FormField label={t("密码", "Password")}><TextField name="activation_code" type="password" required maxLength={256} autoComplete="off" readOnly={action.pending} /></FormField>}
       <div className="xcss-actions"><Button disabled={action.pending} onClick={close}>{t("取消", "Cancel")}</Button>
         {details && <Button disabled={action.pending} onClick={() => void action.run(inspect)}>{t("刷新配对状态", "Refresh pairing status")}</Button>}

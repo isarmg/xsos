@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
-use chrono::{DateTime, Local, NaiveDate, TimeDelta, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use xcss::admin_auth::AdministratorOriginMode;
@@ -540,14 +540,12 @@ async fn cancel_instance(
         .await
         .map_err(database)?
     {
-        store::CancelInviteResult::Cancelled | store::CancelInviteResult::Deleted => {
-            Ok(StatusCode::NO_CONTENT)
-        }
+        store::CancelInviteResult::Cancelled => Ok(StatusCode::NO_CONTENT),
         store::CancelInviteResult::NotFound => {
             Err(Error::NotFound("client instance invite not found".into()))
         }
         store::CancelInviteResult::NotPending => Err(Error::Conflict(
-            "only a pending invite can be cancelled or a cancelled invite deleted".into(),
+            "only a pending invite can be cancelled".into(),
         )),
     }
 }
@@ -929,7 +927,7 @@ struct ReportLogCalendar {
 
 async fn report_log_calendar() -> Json<ReportLogCalendar> {
     Json(ReportLogCalendar {
-        today: Local::now().format("%Y-%m-%d").to_string(),
+        today: Utc::now().format("%Y-%m-%d").to_string(),
     })
 }
 
@@ -947,8 +945,6 @@ struct ReportLogView {
     report_id: String,
     collected_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
-    collected_at_server: String,
-    received_at_server: String,
 }
 
 #[derive(Serialize)]
@@ -962,22 +958,11 @@ struct ReportLogsResponse {
     previous_cursor: Option<String>,
 }
 
-fn local_day_start(day: NaiveDate) -> Result<DateTime<Utc>> {
+fn utc_day_start(day: NaiveDate) -> Result<DateTime<Utc>> {
     let midnight = day
         .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| Error::BadRequest("invalid server date".into()))?;
-    // Local midnight can be skipped or repeated at a time-zone transition.
-    for second in 0..=86_400 {
-        let Some(local) = midnight.checked_add_signed(TimeDelta::seconds(second)) else {
-            break;
-        };
-        if let Some(start) = Local.from_local_datetime(&local).earliest() {
-            return Ok(start.with_timezone(&Utc));
-        }
-    }
-    Err(Error::BadRequest(
-        "server date is outside the supported range".into(),
-    ))
+        .ok_or_else(|| Error::BadRequest("invalid UTC date".into()))?;
+    Ok(Utc.from_utc_datetime(&midnight))
 }
 
 fn server_day_bounds(value: &str) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
@@ -1000,7 +985,7 @@ fn server_day_bounds(value: &str) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     let next = date
         .succ_opt()
         .ok_or_else(|| Error::BadRequest("invalid server date".into()))?;
-    Ok((local_day_start(date)?, local_day_start(next)?))
+    Ok((utc_day_start(date)?, utc_day_start(next)?))
 }
 
 fn report_log_range(query: &ReportLogQuery) -> Result<(&str, &str)> {
@@ -1053,16 +1038,6 @@ async fn host_reports(
                     report_id: row.report_id.to_string(),
                     collected_at: row.collected_at,
                     received_at: row.received_at,
-                    collected_at_server: row
-                        .collected_at
-                        .with_timezone(&Local)
-                        .format("%Y-%m-%d %H:%M:%S %:z")
-                        .to_string(),
-                    received_at_server: row
-                        .received_at
-                        .with_timezone(&Local)
-                        .format("%Y-%m-%d %H:%M:%S %:z")
-                        .to_string(),
                 })
                 .collect();
             Ok(ReportLogsResponse {
@@ -1095,15 +1070,7 @@ async fn host_history(
                 "chart history requires resolution=auto and max_points instead of limit".into(),
             ));
         }
-        let to = query.to.unwrap_or_else(Utc::now);
-        let from = query
-            .from
-            .unwrap_or_else(|| to - chrono::Duration::hours(1));
-        if from >= to || to - from > chrono::Duration::days(31) {
-            return Err(Error::BadRequest(
-                "chart history range must be greater than zero and at most 31 days".into(),
-            ));
-        }
+        let (from, to) = history_chart_bounds(&query, Utc::now())?;
         let max_points = query.max_points.unwrap_or(720);
         if !(100..=1000).contains(&max_points) {
             return Err(Error::BadRequest(
@@ -1116,9 +1083,9 @@ async fn host_history(
             .ok_or_else(|| Error::NotFound("monitored host not found".into()))?;
         return Ok(Json(series).into_response());
     }
-    if query.max_points.is_some() {
+    if query.max_points.is_some() || query.window_seconds.is_some() {
         return Err(Error::BadRequest(
-            "history max_points requires resolution=auto".into(),
+            "history max_points and window_seconds require resolution=auto".into(),
         ));
     }
     let points = store::history(
@@ -1136,6 +1103,30 @@ async fn host_history(
         points,
     })
     .into_response())
+}
+
+fn history_chart_bounds(
+    query: &HistoryQuery,
+    now: chrono::DateTime<Utc>,
+) -> Result<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
+    let (from, to) = match (query.window_seconds, query.from, query.to) {
+        (Some(seconds), None, None) if (1..=31 * 86_400).contains(&seconds) => {
+            (now - chrono::Duration::seconds(seconds), now)
+        }
+        (None, None, None) => (now - chrono::Duration::hours(1), now),
+        (None, Some(from), Some(to)) => (from, to),
+        _ => {
+            return Err(Error::BadRequest(
+                "chart history requires window_seconds between 1 and 2678400 without from/to, or both from and to".into(),
+            ));
+        }
+    };
+    if from >= to || to - from > chrono::Duration::days(31) {
+        return Err(Error::BadRequest(
+            "chart history range must be greater than zero and at most 31 days".into(),
+        ));
+    }
+    Ok((from, to))
 }
 
 async fn delete_host(
@@ -1317,6 +1308,106 @@ mod tests {
             "application/json"
         );
         serde_json::from_slice(&body_bytes(response).await).expect("strict xcss error envelope")
+    }
+
+    #[test]
+    fn relative_history_window_uses_one_server_clock_and_rejects_mixed_bounds() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let query = |value| serde_json::from_value::<HistoryQuery>(value).unwrap();
+        for seconds in [1, 3600, 86400, 31 * 86400] {
+            let (from, to) =
+                history_chart_bounds(&query(serde_json::json!({"window_seconds": seconds})), now)
+                    .unwrap();
+            assert_eq!(to, now);
+            assert_eq!((to - from).num_seconds(), seconds);
+        }
+        let (from, to) = history_chart_bounds(&query(serde_json::json!({})), now).unwrap();
+        assert_eq!((from, to), (now - chrono::Duration::hours(1), now));
+        for value in [
+            serde_json::json!({"window_seconds": 0}),
+            serde_json::json!({"window_seconds": 31 * 86400 + 1}),
+            serde_json::json!({"window_seconds": 3600, "from": now}),
+            serde_json::json!({"window_seconds": 3600, "to": now}),
+            serde_json::json!({"from": now + chrono::Duration::hours(1)}),
+            serde_json::json!({"to": now}),
+            serde_json::json!({"from": now, "to": now}),
+        ] {
+            assert!(history_chart_bounds(&query(value), now).is_err());
+        }
+        let absolute = query(
+            serde_json::json!({"from": "2026-10-12T18:00:00+08:00", "to": "2026-10-12T19:00:00+08:00"}),
+        );
+        assert_eq!(
+            history_chart_bounds(&absolute, now).unwrap(),
+            (
+                now - chrono::Duration::hours(2),
+                now - chrono::Duration::hours(1)
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_retry_keeps_entry_until_the_explicit_delete_route() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::initialize_empty(&pool).await.unwrap();
+        let secrets = crate::crypto::SecretBox::new([0x42; 32]);
+        let (result, _) = store::create_invite(&pool, &secrets, "Cancel retry", "admin")
+            .await
+            .unwrap();
+        let store::CreateInviteResult::Created(invite) = result else {
+            panic!("invite creation failed")
+        };
+        let state = AppState::new(
+            pool.clone(),
+            AdministratorOriginMode::LoopbackDevelopmentHttp,
+            secrets,
+        );
+        // Authentication is tested independently. Exercise real HTTP extractors,
+        // handlers and transactions with a fixture administrator principal.
+        let app = Router::new()
+            .route("/instances/{id}", axum::routing::delete(cancel_instance))
+            .route(
+                "/instances/{id}/delete",
+                axum::routing::delete(delete_instance),
+            )
+            .layer(Extension(Principal {
+                subject: "admin".into(),
+            }))
+            .with_state(state);
+        let send = |suffix: &str| {
+            Request::delete(format!("/instances/{}{suffix}", invite.request_id))
+                .body(Body::empty())
+                .unwrap()
+        };
+        // Discard the committed first response, as when the connection is lost.
+        drop(app.clone().oneshot(send("")).await.unwrap());
+        assert_eq!(
+            app.clone().oneshot(send("")).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            store::list_invites(&pool, &crate::crypto::SecretBox::new([0x42; 32]))
+                .await
+                .unwrap()
+                .0[0]
+                .status,
+            "cancelled"
+        );
+        assert_eq!(
+            app.clone().oneshot(send("/delete")).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM client_instance_invites")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -1639,18 +1730,8 @@ mod tests {
         );
         let (from, _) = super::server_day_bounds("2022-02-01").unwrap();
         let (_, to) = super::server_day_bounds("2023-02-02").unwrap();
-        assert_eq!(
-            from.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string(),
-            "2022-02-01"
-        );
-        assert_eq!(
-            to.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string(),
-            "2023-02-03"
-        );
+        assert_eq!(from.format("%Y-%m-%d").to_string(), "2022-02-01");
+        assert_eq!(to.format("%Y-%m-%d").to_string(), "2023-02-03");
         assert_ne!(
             crate::pagination::Cursor::scope(("reports", "2022-02-01", "2023-02-02")),
             crate::pagination::Cursor::scope(("reports", "2022-02-01", "2023-02-03"))
@@ -1658,19 +1739,18 @@ mod tests {
     }
 
     #[test]
-    fn server_calendar_boundaries_use_each_local_midnight() {
-        assert!(super::server_day_bounds("2026-02-30").is_err());
-        assert!(super::server_day_bounds("-0001-01-01").is_err());
-        assert!(super::server_day_bounds("+10000-01-01").is_err());
-        assert!(super::server_day_bounds("2026-2-03").is_err());
-        let (spring_start, spring_end) = super::server_day_bounds("2026-03-08").unwrap();
-        let (fall_start, fall_end) = super::server_day_bounds("2026-11-01").unwrap();
-        if std::env::var("TZ").as_deref() == Ok("America/New_York") {
-            assert_eq!((spring_end - spring_start).num_hours(), 23);
-            assert_eq!((fall_end - fall_start).num_hours(), 25);
-        } else {
-            assert!(spring_end > spring_start);
-            assert!(fall_end > fall_start);
+    fn server_calendar_boundaries_are_fixed_utc_days() {
+        for invalid in ["2026-02-30", "-0001-01-01", "+10000-01-01", "2026-2-03"] {
+            assert!(super::server_day_bounds(invalid).is_err());
+        }
+        for day in ["2024-02-29", "2026-01-01", "2026-12-31"] {
+            let (start, end) = super::server_day_bounds(day).unwrap();
+            assert_eq!(
+                start.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                format!("{day}T00:00:00Z")
+            );
+            assert_eq!((end - start).num_seconds(), 86_400);
+            assert_eq!(end.format("%H:%M:%S").to_string(), "00:00:00");
         }
     }
 }

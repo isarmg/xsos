@@ -313,6 +313,7 @@ pub struct HistorySeriesResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryQuery {
+    pub window_seconds: Option<i64>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub limit: Option<i64>,

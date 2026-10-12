@@ -55,8 +55,10 @@ try {
         }
         if (/\/monitoring\/hosts\/[0-9a-f-]+\/history$/.test(path)) {
           monitoringRequests++;
-          const from = new URL(request.url()).searchParams.get("from");
+          const params = new URL(request.url()).searchParams;
+          assert.equal(params.has("from"), false);
           const to = new Date().toISOString();
+          const from = new Date(Date.parse(to) - Number(params.get("window_seconds")) * 1000).toISOString();
           return route.fulfill({ json: { host_id: invitation.instance_id, requested_from: from, requested_to: to, actual_from: from, actual_to: to, step_seconds: 5, source: "raw", points: [] } });
         }
         if (path.endsWith("/monitoring/hosts")) return route.fulfill({ json: { hosts: [], next_cursor: null, previous_cursor: null, statistics: { total: { total: 0, online: 0 }, windows: { total: 0, online: 0 }, linux: { total: 0, online: 0 }, macos: { total: 0, online: 0 } } } });
@@ -83,7 +85,7 @@ try {
             invitation.display_name = displayName;
             return route.fulfill({ status: 204 });
           }
-          if (invitation.status === "cancelled") invitation = null; else invitation.status = "cancelled";
+          invitation.status = "cancelled";
           return route.fulfill({ status: 204 });
         }
         if (path.endsWith(`/pairing-requests/${pairId}`)) return route.fulfill({ json: {

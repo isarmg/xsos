@@ -103,9 +103,8 @@ export function HostDetails({ hostId, hostName, refreshSignal, removed, overview
       refreshQueued = false;
       forceQueued = false;
       controller = new AbortController();
-      const from = new Date(Date.now() - historyHours * 60 * 60 * 1000).toISOString();
       try {
-        const value = await client.request(`/api/v1/monitoring/hosts/${hostId}/history?from=${encodeURIComponent(from)}&resolution=auto&max_points=720`, isHistorySeriesResponse, { signal: controller.signal });
+        const value = await client.request(`/api/v1/monitoring/hosts/${hostId}/history?window_seconds=${historyHours * 60 * 60}&resolution=auto&max_points=720`, isHistorySeriesResponse, { signal: controller.signal });
         if (!stopped && !controller.signal.aborted && value.host_id === hostId) {
           setHistory(value); setHistoryFailure(null);
         }
@@ -172,7 +171,7 @@ export function HostDetails({ hostId, hostName, refreshSignal, removed, overview
       <dt>{t("最新内存", "Latest memory")}</dt><dd>{formatPercent(host.memory_usage_percent)}</dd>
       <dt>{t("数据采集时间", "Data collected at")}</dt><dd>{formatTime(host.latest_collected_at)}</dd>
       <dt>{t("服务端最近收到", "Last received by server")}</dt><dd>{formatTime(latest === null ? null : host.last_seen_at)}</dd>
-      <dt>{t("页面最近更新", "Page last updated")}</dt><dd>{updatedAt?.toLocaleString(getLocale()) ?? "—"}</dd>
+      <dt>{t("页面最近更新", "Page last updated")}</dt><dd>{updatedAt ? formatTime(updatedAt.toISOString()) : "—"}</dd>
     </dl>{latest && <SnapshotCard title={t("客户端状态", "Client health")} record={{ uptime_seconds: latest.system.uptime_seconds, ...latest.client }} framed={false} />}{metricsLagging && <p role="status">{t("服务端仍在收到上报，但当前展示的指标采集时间明显较早；客户端可能正在补传或已调整时钟。", "The server is still receiving reports, but the displayed metrics were collected much earlier. The client may be replaying queued reports or may have adjusted its clock.")}</p>}
       {metricsAhead && <p role="status">{t("指标采集时间明显晚于服务端接收时间；客户端时钟可能偏快，后续指标可能暂时不更新。", "Metric collection time is well ahead of server receipt time. The client clock may be fast, and subsequent metrics may not update until it catches up.")}</p>}
     </div>;
@@ -433,5 +432,5 @@ function formatPercent(value: number | null): string { return value === null ? t
 function formatTime(value: string | null): string {
   if (value === null) return t("尚未上报", "Not yet reported");
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString(getLocale()) : t("未知", "Unknown");
+  return Number.isFinite(date.getTime()) ? `${date.toLocaleString(getLocale(), { timeZone: "UTC", hourCycle: "h23" })} UTC` : t("未知", "Unknown");
 }

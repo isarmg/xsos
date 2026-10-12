@@ -6,11 +6,11 @@
 
 ```sh
 sudo systemctl status xsos.service --no-pager
-sudo journalctl -u xsos.service -n 100 --no-pager
+sudo journalctl --utc -u xsos.service -n 100 --no-pager
 curl --fail http://127.0.0.1:18105/readyz
 ```
 
-预期 `/readyz` 返回 `{"ready":true}`。持续跟踪日志使用 `sudo journalctl -u xsos.service -f`，Ctrl+C 只结束查看。
+预期 `/readyz` 返回 `{"ready":true}`。持续跟踪日志使用 `sudo journalctl --utc -u xsos.service -f`，Ctrl+C 只结束查看。
 应用还在数据目录的 `logs/` 写入 JSON 日志，默认活动文件 8 MiB、四个归档，总上限 40 MiB。
 
 ## 停止、启动与修改配置

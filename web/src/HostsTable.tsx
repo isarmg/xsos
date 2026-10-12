@@ -5,7 +5,7 @@ import type { Host } from "./api";
 function percent(value: number | null) { return value === null ? t("未上报", "Not reported") : `${value.toFixed(1)}%`; }
 function timestamp(value: string) {
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString(getLocale()) : t("未知", "Unknown");
+  return Number.isFinite(date.getTime()) ? `${date.toLocaleString(getLocale(), { timeZone: "UTC", hourCycle: "h23" })} UTC` : t("未知", "Unknown");
 }
 export function HostsTable({ hosts, select }: { hosts: Host[]; select(id: string): void }) {
   if (!hosts.length) return <EmptyState>{t("暂无已配对主机，请新建实例并完成配对。", "No paired hosts yet. Create an instance and complete pairing.")}</EmptyState>;
