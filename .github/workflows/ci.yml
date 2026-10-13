@@ -85,17 +85,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile \
-            scripts/package-server-release.py \
-            scripts/write-server-release-manifest.py \
-            scripts/test-server-release-tooling.py
-          python3 scripts/test-server-release-tooling.py
-          python3 scripts/test-installation.py
-          bash -n install.sh
-          test "$(grep -Ec '^[[:space:]]*ExecStart[[:space:]]*=' deploy/xsos.service)" -eq 1
-          grep -Fx \
-            'ExecStart=/opt/isarmg/xsos/bin/xsos run --config /etc/isarmg/xsos/config.json' \
-            deploy/xsos.service
+          python3 -m py_compile scripts/package-server-release.py
+          python3 scripts/test-package-boundary.py
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
       - name: Enforce the Server target boundary

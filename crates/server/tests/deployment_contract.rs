@@ -1,28 +1,47 @@
 #![cfg(target_os = "linux")]
-
-use std::{fs, os::unix::fs::PermissionsExt, path::Path};
-
-#[test]
-fn follows_the_shared_deployment_contract() {
+use std::{fs, os::unix::fs::PermissionsExt};
+#[tokio::test]
+async fn offline_report_preserves_external_instance_data_and_fixed_root_log_paths() {
     let temporary = tempfile::tempdir().unwrap();
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let data_dir = temporary.path().join("instance %#?");
-    let config = temporary.path().join("config.json");
+    let root = temporary.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(root.join("config")).unwrap();
+    fs::set_permissions(root.join("config"), fs::Permissions::from_mode(0o700)).unwrap();
+    let data = temporary.path().join("external-instance-data");
+    let config = root.join("config/config.json");
     fs::write(
         &config,
-        serde_json::to_vec(&serde_json::json!({
-            "data_dir": data_dir,
-            "bind": "127.0.0.1:0",
-            "development": true,
-        }))
+        serde_json::to_vec(
+            &serde_json::json!({"data_dir":data,"bind":"127.0.0.1:0","development":true}),
+        )
         .unwrap(),
     )
     .unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
-    xcss::testkit::assert_deployment_cli_contract(
-        Path::new(env!("CARGO_BIN_EXE_xsos")),
-        &config,
-        &data_dir,
-        &["xsos.sqlite3", "secrets.json"],
-    );
+    let report = xsos::offline::validate_config(&root, &config)
+        .await
+        .unwrap();
+    assert_eq!(report.root, root);
+    assert_eq!(report.data_dir, data);
+    assert!(report.writable_paths.contains(&root.join("logs")));
+    assert!(report.writable_paths.contains(&root.join("run")));
+    assert!(!data.exists());
+    assert!(!root.join("logs").exists());
+    assert!(!root.join("run").exists());
+    for protected in [
+        "config",
+        "bin",
+        "libexec",
+        "logs",
+        "run",
+        "share",
+        "maintenance",
+    ] {
+        fs::write(&config,serde_json::to_vec(&serde_json::json!({"data_dir":root.join(protected),"bind":"127.0.0.1:0","development":true})).unwrap()).unwrap();
+        assert!(
+            xsos::offline::validate_config(&root, &config)
+                .await
+                .is_err()
+        );
+    }
 }

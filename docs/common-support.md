@@ -27,6 +27,4 @@ metadata 查看包、目标和直接依赖，tree 查看完整依赖图，npm ci
 
 更新公共库时一起更新调用代码、完整 revision、锁文件及对应测试。完整检查见[开发指南](development.md)；公共库作为构建依赖随产品交付，部署时使用产品自己的服务、配置和数据目录。
 
-当前 1.0.2 候选固定 xcss 1.0.7，Rust revision 为 `b3a68b94e1b7bae53685bae07449e3f78e3c20a8`。
-Web 输入为 `https://github.com/isarmg/xcss/releases/download/v1.0.7/xcss-web-1.0.7.tgz`，
-SHA256 为 `3507d88e09f64830aa42c44e435728f2e0b0ac0696df6c59b4362e068b4bde34`，npm SHA512 integrity 同时由锁文件和工具链检查约束。
+Rust 输入固定为 xcss 1.0.13 / `b9b5858088510d0bf6832044353c92d09ee123fe`；Web 输入为 `https://github.com/isarmg/xcss/releases/download/v1.0.13/xcss-web-1.0.13.tgz`，锁文件 SHA512 integrity 固定为 `sha512-nqoi5uOqmrjH/2j3PXoi1bGVPucr+Rm1HzWiXjr2bhzJ6AgnlD1Y6AywKvIAZnOGIVg5RFi36aLc2vc5Srri9g==`。正式发行不使用本地路径补丁。

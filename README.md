@@ -1,26 +1,17 @@
-# xsos
+# XSOS
 
-硬件监控服务。
+XSOS receives authenticated host reports and provides host, instance, history and administrator management.
 
-## 功能
-
-提供管理台、实例配对、硬件遥测接收与历史查询。
-
-## 平台
-
-Server 支持 Linux x86_64 GNU，发行包内嵌管理页面，使用 systemd 管理服务。
-
-## 快速部署
-
-解压发行包，按 config 中的示例准备 JSON，执行 `sudo ./install.sh setup /absolute/config.json [USERNAME]`。管理员名默认 admin，密码从标准输入读取；实例密钥由 init 自动生成。完成后按输出启动服务。升级执行 `sudo ./install.sh upgrade`。
-
-## 源码编译
-
-使用仓库固定的 Rust 1.99.0、Node.js 26.7.0：
+The server runs on x86_64 GNU/Linux. Its executable has one runtime entry point:
 
 ```sh
-npm ci --prefix web
-web/node_modules/.bin/xcss-build-server --config xcss-web-build.json --mode development --no-install
+xsos --root /opt/isarmg/xsos
 ```
 
-[完整文档](docs/README.md)
+Configuration is `ROOT/config/config.json`. State defaults to `ROOT/state`; an explicit `data_dir` may select external instance data. Logs and transient runtime files always use `ROOT/logs` and `ROOT/run`. Configuration files are owned by the service account, with directory mode 0700 and file mode 0600.
+
+Installation, upgrades and offline account maintenance are supplied by the separately maintained [XSSI](https://github.com/isarmg/xssi) scripts and signed `libexec/setup` helper. The server executable only runs the service. Upgrade scripts verify the downloaded package before stopping every writer, then use XSSC for locked backups, declared migration, replacement and readiness checks. Uninstallation is managed by the operator.
+
+The server manages application authentication, verified instance and file quotas, and bounded resource use. It does not identify client IP addresses or configure any reverse proxy.
+
+See [configuration](docs/configuration.md), [operations](docs/operations.md), [development](docs/development.md) and [feature inventory](docs/feature-inventory-and-tradeoffs.md).

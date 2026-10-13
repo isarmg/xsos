@@ -4,10 +4,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use xcss::client_ip::{ClientIp, TrustedProxies};
 use xcss::server_cli::{ContractJson, ContractPath, ContractQuery};
-#[cfg(test)]
-use {axum::extract::ConnectInfo, std::net::SocketAddr};
 
 use axum::{
     Json, Router,
@@ -50,7 +47,6 @@ pub struct AppState {
     pub secrets: crate::crypto::SecretBox,
     administrator: Arc<AdministratorService<SqliteAdministratorStore>>,
     administrator_origin: AdministratorOriginMode,
-    trusted_proxies: TrustedProxies,
     runtime: xcss::server_runtime::RuntimeHandle,
     pairing_admission: crate::pairing_admission::PairingAdmission,
     report_buckets: Arc<Mutex<ReportBuckets>>,
@@ -112,7 +108,6 @@ impl AppState {
             secrets,
             administrator,
             administrator_origin,
-            trusted_proxies: TrustedProxies::parse(&[]).expect("empty proxy trust is valid"),
             runtime,
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
             report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
@@ -121,11 +116,6 @@ impl AppState {
             #[cfg(test)]
             _telemetry_task: None,
         }
-    }
-
-    pub fn with_trusted_proxies(mut self, trusted_proxies: TrustedProxies) -> Self {
-        self.trusted_proxies = trusted_proxies;
-        self
     }
 
     #[cfg(test)]
@@ -345,7 +335,6 @@ pub fn router(state: AppState, static_dir: impl Into<Option<PathBuf>>) -> anyhow
             post(activate_capability),
         )
         .layer(DefaultBodyLimit::max(CLIENT_REPORT_MAX_BODY_BYTES));
-    let trusted_proxies = state.trusted_proxies.clone();
     let product = console.merge(client).with_state(state);
     Ok(Router::new()
         .merge(platform)
@@ -375,10 +364,6 @@ pub fn router(state: AppState, static_dir: impl Into<Option<PathBuf>>) -> anyhow
             )
         })
         .method_not_allowed_fallback(|| async { Error::MethodNotAllowed })
-        .layer(middleware::from_fn_with_state(
-            trusted_proxies,
-            xcss::client_ip::middleware,
-        ))
         .layer(axum::middleware::from_fn(log_request))
         .layer(middleware::from_fn(
             xcss::server_cli::request_context_middleware,
@@ -419,9 +404,7 @@ async fn create_instance(
     Extension(principal): Extension<Principal>,
     ContractJson(request): ContractJson<CreateClientInstanceRequest>,
 ) -> Result<Response> {
-    state
-        .pairing_admission
-        .check_invite_account(&principal.subject)?;
+    let _work = state.pairing_admission.acquire_work()?;
     let name = request.validated()?;
     let (result, activation_code) =
         store::create_invite(&state.pool, &state.secrets, &name, &principal.subject)
@@ -485,8 +468,7 @@ async fn list_instances(
     };
     let scope = crate::pagination::Cursor::scope(("instances", &principal.subject));
     let cursor = list_cursor(query.cursor.as_deref(), &scope)?;
-    let owner = format!("instances:{}", principal.subject);
-    crate::pagination::response(&state.list_admission.clone(), &owner, async move {
+    crate::pagination::response(&state.list_admission.clone(), focused, async move {
         let (page, hosts) =
             store::list_invites_page(&state.pool, &state.secrets, cursor, focused, &scope)
                 .await
@@ -582,13 +564,10 @@ async fn delete_instance(
 
 async fn create_pairing(
     State(state): State<AppState>,
-    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractJson(request): ContractJson<ClientPairingRequest>,
 ) -> Result<Response> {
     validate_pairing(&request)?;
-    state
-        .pairing_admission
-        .check_create(source, &request.host.id)?;
+    let _work = state.pairing_admission.acquire_work()?;
     match store::create_pairing(&state.pool, &request)
         .await
         .map_err(database)?
@@ -636,15 +615,15 @@ async fn create_pairing(
 
 async fn pairing_public(
     State(state): State<AppState>,
-    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractPath(id): ContractPath<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
-    state.pairing_admission.check_poll(source, id)?;
+    let _work = state.pairing_admission.acquire_work()?;
     let value = store::pairing_public(&state.pool, id)
         .await
         .map_err(database)?
         .ok_or(Error::PairingTransactionNotFound { request_id: id })?;
+    state.pairing_admission.check_poll(id)?;
     let mut response = Json(value).into_response();
     response
         .headers_mut()
@@ -654,12 +633,11 @@ async fn pairing_public(
 
 async fn pairing_status(
     State(state): State<AppState>,
-    Extension(ClientIp(source)): Extension<ClientIp>,
     headers: HeaderMap,
     ContractPath(id): ContractPath<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
-    state.pairing_admission.check_poll(source, id)?;
+    let _work = state.pairing_admission.acquire_work()?;
     let secret = authorization(&headers, "pairing").ok_or(Error::Unauthorized)?;
     if !(32..=256).contains(&secret.len()) || secret.chars().any(char::is_whitespace) {
         return Err(Error::Unauthorized);
@@ -678,6 +656,7 @@ async fn pairing_status(
             Err(Error::PairingTransactionNotFound { request_id: id })
         };
     };
+    state.pairing_admission.check_poll(id)?;
     let mut response = Json(ClientPairingStatusResponse {
         status,
         instance_id,
@@ -691,46 +670,42 @@ async fn pairing_status(
 
 async fn activate_admin(
     State(state): State<AppState>,
-    Extension(ClientIp(source)): Extension<ClientIp>,
     Extension(principal): Extension<Principal>,
     ContractJson(request): ContractJson<ActivateClientRequest>,
 ) -> Result<Response> {
-    state
-        .pairing_admission
-        .check_invite_account(&principal.subject)?;
-    activate(&state, source, request, &principal.subject).await
+    activate(&state, request, &principal.subject).await
 }
 
 async fn activate_capability(
     State(state): State<AppState>,
-    Extension(ClientIp(source)): Extension<ClientIp>,
     ContractJson(request): ContractJson<ActivateClientRequest>,
 ) -> Result<Response> {
-    activate(&state, source, request, "client-capability").await
+    activate(&state, request, "client-capability").await
 }
 
 async fn activate(
     state: &AppState,
-    source: std::net::IpAddr,
     request: ActivateClientRequest,
     actor: &str,
 ) -> Result<Response> {
     let id = canonical_uuid(&request.request_id, "pairing request id")?;
-    state.pairing_admission.check_activation(source, id)?;
+    let _work = state.pairing_admission.acquire_work()?;
     if request.activation_code.len() > 256
         || request.activation_code.chars().any(char::is_whitespace)
     {
         return Err(Error::Unauthorized);
     }
-    match store::activate(
-        &state.pool,
-        &state.secrets,
-        id,
-        &crate::token_hash(&request.activation_code),
-        actor,
-    )
-    .await
-    .map_err(database)?
+    let activation_hash = crate::token_hash(&request.activation_code);
+    if let Some(instance_id) =
+        store::verified_activation_instance(&state.pool, id, &activation_hash)
+            .await
+            .map_err(database)?
+    {
+        state.pairing_admission.check_activation(instance_id)?;
+    }
+    match store::activate(&state.pool, &state.secrets, id, &activation_hash, actor)
+        .await
+        .map_err(database)?
     {
         store::ActivateResult::Active(instance) => {
             let mut response = Json(ActivateClientResponse {
@@ -900,8 +875,7 @@ async fn list_hosts(
     };
     let scope = crate::pagination::Cursor::scope(("hosts", &principal.subject));
     let cursor = list_cursor(query.cursor.as_deref(), &scope)?;
-    let owner = format!("hosts:{}", principal.subject);
-    crate::pagination::response(&state.list_admission.clone(), &owner, async move {
+    crate::pagination::response(&state.list_admission.clone(), focused, async move {
         let (page, statistics) = store::list_hosts_page(&state.pool, cursor, focused, &scope)
             .await
             .map_err(database)?;
@@ -920,17 +894,13 @@ async fn host_detail(
     ContractPath(id): ContractPath<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "host id")?;
-    crate::pagination::response(
-        &state.list_admission.clone(),
-        &format!("detail:{id}"),
-        async move {
-            let (host, latest) = store::get_host(&state.pool, id)
-                .await
-                .map_err(database)?
-                .ok_or_else(|| Error::NotFound("monitored host not found".into()))?;
-            Ok(HostDetailResponse { host, latest })
-        },
-    )
+    crate::pagination::response(&state.list_admission.clone(), Some(id), async move {
+        let (host, latest) = store::get_host(&state.pool, id)
+            .await
+            .map_err(database)?
+            .ok_or_else(|| Error::NotFound("monitored host not found".into()))?;
+        Ok(HostDetailResponse { host, latest })
+    })
     .await
 }
 
@@ -1037,33 +1007,29 @@ async fn host_reports(
     let scope =
         crate::pagination::Cursor::scope(("reports", &principal.subject, id, &date, &end_date));
     let cursor = list_cursor(query.cursor.as_deref(), &scope)?;
-    crate::pagination::response(
-        &state.list_admission.clone(),
-        &format!("reports:{id}"),
-        async move {
-            let page = store::report_logs_page(&state.pool, id, from, to, cursor, &scope)
-                .await
-                .map_err(database)?
-                .ok_or_else(|| Error::NotFound("monitored host not found".into()))?;
-            let reports = page
-                .rows
-                .into_iter()
-                .map(|row| ReportLogView {
-                    report_id: row.report_id.to_string(),
-                    collected_at: row.collected_at,
-                    received_at: row.received_at,
-                })
-                .collect();
-            Ok(ReportLogsResponse {
-                host_id: id.to_string(),
-                date,
-                end_date,
-                reports,
-                next_cursor: page.next_cursor,
-                previous_cursor: page.previous_cursor,
+    crate::pagination::response(&state.list_admission.clone(), Some(id), async move {
+        let page = store::report_logs_page(&state.pool, id, from, to, cursor, &scope)
+            .await
+            .map_err(database)?
+            .ok_or_else(|| Error::NotFound("monitored host not found".into()))?;
+        let reports = page
+            .rows
+            .into_iter()
+            .map(|row| ReportLogView {
+                report_id: row.report_id.to_string(),
+                collected_at: row.collected_at,
+                received_at: row.received_at,
             })
-        },
-    )
+            .collect();
+        Ok(ReportLogsResponse {
+            host_id: id.to_string(),
+            date,
+            end_date,
+            reports,
+            next_cursor: page.next_cursor,
+            previous_cursor: page.previous_cursor,
+        })
+    })
     .await
 }
 
@@ -1243,7 +1209,6 @@ mod tests {
 
     async fn app_with_pairing_admission(
         pairing_admission: crate::pairing_admission::PairingAdmission,
-        trusted_proxies: &[String],
     ) -> Router {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1256,30 +1221,24 @@ mod tests {
                 pool,
                 AdministratorOriginMode::LoopbackDevelopmentHttp,
                 pairing_admission,
-            )
-            .with_trusted_proxies(TrustedProxies::parse(trusted_proxies).unwrap()),
+            ),
             test_static_dir(),
         )
         .unwrap()
     }
 
-    fn login_request(body: impl Into<Body>, peer: &str) -> Request<Body> {
-        let mut request = Request::post("/api/v1/auth/login")
+    fn login_request(body: impl Into<Body>) -> Request<Body> {
+        Request::post("/api/v1/auth/login")
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::HOST, "127.0.0.1")
             .header(header::ORIGIN, "http://127.0.0.1")
             .header(xcss::admin_auth::SEC_FETCH_SITE_HEADER, "same-origin")
             .body(body.into())
-            .unwrap();
-        request.extensions_mut().insert(ConnectInfo(
-            peer.parse::<SocketAddr>().expect("test peer address"),
-        ));
-        request
+            .unwrap()
     }
 
     fn pairing_request(
         host_id: uuid::Uuid,
-        peer: &str,
         nonce: char,
         protocol_version: u16,
         client_version: &str,
@@ -1298,14 +1257,10 @@ mod tests {
             "token_hash": nonce.to_string().repeat(64),
             "polling_secret_hash": if nonce == 'a' { "b".repeat(64) } else { "c".repeat(64) }
         });
-        let mut request = Request::post(xsos_protocol::CLIENT_PAIRING_REQUESTS_PATH)
+        Request::post(xsos_protocol::CLIENT_PAIRING_REQUESTS_PATH)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
-            .unwrap();
-        request.extensions_mut().insert(ConnectInfo(
-            peer.parse::<SocketAddr>().expect("test peer address"),
-        ));
-        request
+            .unwrap()
     }
 
     async fn body_bytes(response: Response) -> Vec<u8> {
@@ -1551,7 +1506,6 @@ mod tests {
             .clone()
             .oneshot(pairing_request(
                 uuid::Uuid::new_v4(),
-                "192.0.2.80:41000",
                 'a',
                 xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
                 "0.9.999",
@@ -1561,13 +1515,7 @@ mod tests {
         assert_eq!(accepted.status(), StatusCode::CREATED);
 
         let rejected = application
-            .oneshot(pairing_request(
-                uuid::Uuid::new_v4(),
-                "192.0.2.81:41000",
-                'd',
-                2,
-                "0.9.999",
-            ))
+            .oneshot(pairing_request(uuid::Uuid::new_v4(), 'd', 2, "0.9.999"))
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
@@ -1626,7 +1574,6 @@ mod tests {
             .await
             .oneshot(login_request(
                 r#"{"username":"admin","password":"correct-password"}"#,
-                "192.0.2.10:41000",
             ))
             .await
             .unwrap();
@@ -1639,7 +1586,7 @@ mod tests {
         let application = app_with_admin("admin", "correct-password").await;
         let body = r#"{"username":"admin","password":"wrong-password"}"#;
 
-        let mut authority_only = login_request(body, "192.0.2.11:41000");
+        let mut authority_only = login_request(body);
         authority_only.headers_mut().remove(header::HOST);
         *authority_only.uri_mut() = "http://127.0.0.1/api/v1/auth/login".parse().unwrap();
         assert_eq!(
@@ -1652,7 +1599,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
 
-        let mut ambiguous = login_request(body, "192.0.2.12:41000");
+        let mut ambiguous = login_request(body);
         *ambiguous.uri_mut() = "http://127.0.0.1/api/v1/auth/login".parse().unwrap();
         assert_eq!(
             application.oneshot(ambiguous).await.unwrap().status(),
@@ -1666,102 +1613,63 @@ mod tests {
             r#"{{"username":"admin","password":"{}"}}"#,
             "x".repeat(xcss::admin_core::ADMIN_BODY_MAX_BYTES)
         );
-        let response = app()
-            .await
-            .oneshot(login_request(body, "192.0.2.20:41000"))
-            .await
-            .unwrap();
+        let response = app().await.oneshot(login_request(body)).await.unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
-    async fn pairing_source_limit_precedes_sqlite_and_returns_retry_after() {
+    async fn unknown_pairing_ids_do_not_consume_verified_request_capacity() {
         let admission = crate::pairing_admission::PairingAdmission::for_test(
             1,
-            8,
+            1,
             std::time::Duration::from_secs(300),
         );
-        let app = app_with_pairing_admission(admission, &[]).await;
-        let first = app
+        let app = app_with_pairing_admission(admission).await;
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get(format!(
+                        "/api/v1/xsoc/pairing-requests/{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        let response = app
             .clone()
             .oneshot(pairing_request(
                 uuid::Uuid::new_v4(),
-                "192.0.2.50:41000",
                 'a',
                 xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
                 env!("CARGO_PKG_VERSION"),
             ))
             .await
             .unwrap();
-        assert_eq!(first.status(), StatusCode::CREATED);
-
-        let limited = app
-            .oneshot(pairing_request(
-                uuid::Uuid::new_v4(),
-                "192.0.2.50:41001",
-                'd',
-                xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
-                env!("CARGO_PKG_VERSION"),
-            ))
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(
-            limited.headers()[header::RETRY_AFTER]
-                .to_str()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap()
-                >= 1
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let url = format!(
+            "/api/v1/xsoc/pairing-requests/{}",
+            value["request_id"].as_str().unwrap()
         );
-        let envelope = error_envelope(limited).await;
-        assert_eq!(envelope.code.as_str(), "too_many_requests");
-        assert_eq!(envelope.message, "pairing source rate exceeded");
-        assert!(envelope.retryable);
-        assert_eq!(envelope.details["retry_after_seconds"], 60);
-    }
-
-    #[tokio::test]
-    async fn pairing_limits_use_common_client_ip_only_for_explicitly_trusted_proxies() {
-        for trusted in [false, true] {
-            let admission = crate::pairing_admission::PairingAdmission::for_test(
-                1,
-                8,
-                std::time::Duration::from_secs(300),
-            );
-            let proxies = if trusted {
-                vec!["192.0.2.0/24".to_owned()]
-            } else {
-                vec![]
-            };
-            let app = app_with_pairing_admission(admission, &proxies).await;
-            for (index, forwarded) in ["198.51.100.10", "198.51.100.11", "198.51.100.10"]
-                .into_iter()
-                .enumerate()
-            {
-                let mut request = pairing_request(
-                    uuid::Uuid::new_v4(),
-                    "192.0.2.50:41000",
-                    ['a', 'd', 'e'][index],
-                    xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
-                    env!("CARGO_PKG_VERSION"),
-                );
-                request
-                    .headers_mut()
-                    .insert("x-forwarded-for", forwarded.parse().unwrap());
-                let response = app.clone().oneshot(request).await.unwrap();
-                let expected = if index == 0 || (trusted && index == 1) {
-                    StatusCode::CREATED
-                } else {
-                    StatusCode::TOO_MANY_REQUESTS
-                };
-                assert_eq!(
-                    response.status(),
-                    expected,
-                    "trusted={trusted}, request={index}"
-                );
-            }
-        }
+        let response = app
+            .clone()
+            .oneshot(Request::get(&url).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .oneshot(Request::get(&url).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[test]

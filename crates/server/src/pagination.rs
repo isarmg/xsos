@@ -161,26 +161,24 @@ where
 #[derive(Clone)]
 pub struct Admission {
     global: std::sync::Arc<tokio::sync::Semaphore>,
-    owners: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<String, std::sync::Weak<tokio::sync::Semaphore>>,
-        >,
+    instances: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<Uuid, std::sync::Weak<tokio::sync::Semaphore>>>,
     >,
 }
 struct Permit {
     _global: tokio::sync::OwnedSemaphorePermit,
-    _owner: tokio::sync::OwnedSemaphorePermit,
+    _instance: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl Default for Admission {
     fn default() -> Self {
         Self {
             global: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
-            owners: Default::default(),
+            instances: Default::default(),
         }
     }
 }
 impl Admission {
-    fn acquire(&self, owner: &str) -> crate::error::Result<Permit> {
+    fn acquire(&self, instance: Option<Uuid>) -> crate::error::Result<Permit> {
         let busy = || crate::error::Error::RateLimited {
             message: "list resource is busy",
             retry_after: 1,
@@ -190,31 +188,36 @@ impl Admission {
             .clone()
             .try_acquire_owned()
             .map_err(|_| busy())?;
-        let semaphore = {
-            let mut owners = self
-                .owners
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            owners.retain(|_, weak| weak.strong_count() > 0);
-            if let Some(value) = owners.get(owner).and_then(std::sync::Weak::upgrade) {
-                value
-            } else {
-                let value = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-                owners.insert(owner.to_owned(), std::sync::Arc::downgrade(&value));
-                value
-            }
-        };
-        let owner = semaphore.try_acquire_owned().map_err(|_| busy())?;
+        let instance = instance
+            .map(|instance| {
+                let semaphore = {
+                    let mut instances = self
+                        .instances
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    instances.retain(|_, weak| weak.strong_count() > 0);
+                    if let Some(value) = instances.get(&instance).and_then(std::sync::Weak::upgrade)
+                    {
+                        value
+                    } else {
+                        let value = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+                        instances.insert(instance, std::sync::Arc::downgrade(&value));
+                        value
+                    }
+                };
+                semaphore.try_acquire_owned().map_err(|_| busy())
+            })
+            .transpose()?;
         Ok(Permit {
             _global: global,
-            _owner: owner,
+            _instance: instance,
         })
     }
 }
 
 pub async fn response<T, F>(
     admission: &Admission,
-    owner: &str,
+    instance: Option<Uuid>,
     work: F,
 ) -> crate::error::Result<axum::response::Response>
 where
@@ -222,7 +225,7 @@ where
     F: std::future::Future<Output = crate::error::Result<T>> + Send + 'static,
 {
     use axum::response::IntoResponse;
-    let permit = admission.acquire(owner)?;
+    let permit = admission.acquire(instance)?;
     // Detaching the admitted task on caller cancellation keeps its actual SQL
     // worker and resource reservation paired until close has completed.
     let task = tokio::spawn(async move {
@@ -279,6 +282,21 @@ impl std::io::Write for LimitedOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unscoped_lists_share_only_the_global_resource_budget() {
+        let admission = Admission::default();
+        let permits: Vec<_> = (0..4).map(|_| admission.acquire(None).unwrap()).collect();
+        assert!(admission.acquire(None).is_err());
+        assert!(admission.acquire(Some(Uuid::new_v4())).is_err());
+        drop(permits);
+        let instance = Uuid::new_v4();
+        let scoped = admission.acquire(Some(instance)).unwrap();
+        assert!(admission.acquire(Some(instance)).is_err());
+        let list = admission.acquire(None).unwrap();
+        drop(scoped);
+        drop(list);
+        assert!(admission.acquire(Some(instance)).is_ok());
+    }
     #[tokio::test]
     async fn admission_survives_caller_cancellation_and_separates_resources() {
         let admission = Admission::default();
@@ -287,8 +305,10 @@ mod tests {
         let child_admission = admission.clone();
         let child_start = started.clone();
         let child_release = release.clone();
+        let instance = Uuid::new_v4();
+        let other_instance = Uuid::new_v4();
         let caller = tokio::spawn(async move {
-            response(&child_admission, "reports:a", async move {
+            response(&child_admission, Some(instance), async move {
                 child_start.notify_one();
                 child_release.notified().await;
                 Ok(1)
@@ -298,15 +318,15 @@ mod tests {
         started.notified().await;
         caller.abort();
         let _ = caller.await;
-        assert!(admission.acquire("reports:a").is_err());
-        let other = admission.acquire("reports:b").unwrap();
-        let same_admin_other = admission.acquire("hosts:a").unwrap();
+        assert!(admission.acquire(Some(instance)).is_err());
+        let other = admission.acquire(Some(other_instance)).unwrap();
+        let unscoped_list = admission.acquire(None).unwrap();
         drop(other);
-        drop(same_admin_other);
+        drop(unscoped_list);
         release.notify_one();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if admission.acquire("reports:a").is_ok() {
+                if admission.acquire(Some(instance)).is_ok() {
                     break;
                 };
                 tokio::task::yield_now().await;

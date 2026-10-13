@@ -33,8 +33,6 @@ pub enum Error {
     Conflict(String),
     #[error("{0}")]
     UnsupportedMediaType(String),
-    #[error("login rate limit exceeded")]
-    LoginRateLimited { retry_after: u64 },
     #[error("{message}")]
     RateLimited {
         message: &'static str,
@@ -72,9 +70,7 @@ impl IntoResponse for Error {
             Self::PairingTransactionExpired { .. } => StatusCode::GONE,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::LoginRateLimited { .. } | Self::RateLimited { .. } => {
-                StatusCode::TOO_MANY_REQUESTS
-            }
+            Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable(_) | Self::RetryableUnavailable { .. } => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
@@ -82,9 +78,7 @@ impl IntoResponse for Error {
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let retry_after = match &self {
-            Self::LoginRateLimited { retry_after } | Self::RateLimited { retry_after, .. } => {
-                Some(*retry_after)
-            }
+            Self::RateLimited { retry_after, .. } => Some(*retry_after),
             Self::RetryableUnavailable { retry_after, .. } => Some(*retry_after),
             _ => None,
         };
@@ -112,9 +106,7 @@ impl IntoResponse for Error {
             Self::UnsupportedMediaType(_) => {
                 product_envelope("unsupported_media_type", message, false)
             }
-            Self::LoginRateLimited { .. } | Self::RateLimited { .. } => {
-                ErrorEnvelope::new(HttpStatus::TooManyRequests, message)
-            }
+            Self::RateLimited { .. } => ErrorEnvelope::new(HttpStatus::TooManyRequests, message),
             Self::Unavailable(_) | Self::RetryableUnavailable { .. } | Self::Database(_) => {
                 ErrorEnvelope::new(HttpStatus::ServiceUnavailable, message)
             }

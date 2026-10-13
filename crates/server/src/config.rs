@@ -6,9 +6,11 @@ use std::{
     time::Duration,
 };
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
-use xcss::config::{ConfigSource, EnvMapping, EnvValueKind, Override};
+#[cfg(test)]
+use xcss::config::Override;
+use xcss::config::{ConfigSource, EnvMapping, EnvValueKind};
 
 use crate::retention::{
     DEFAULT_AGGREGATE_RETENTION_DAYS, DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
@@ -19,76 +21,15 @@ use crate::telemetry::TelemetryWriterConfig;
 use xcss::admin_auth::AdministratorOriginMode;
 
 #[derive(Debug, Parser)]
-#[command(name = "xsos", version,
-    long_version = concat!(env!("CARGO_PKG_VERSION"), " source=", env!("XSOS_SOURCE_REVISION"), " xcss=", env!("XCSS_REVISION")), about)]
+#[command(name = "xsos", version, about = "Host telemetry service")]
 pub struct Cli {
-    #[command(subcommand)]
-    pub command: Command,
-    #[arg(long, global = true)]
-    pub config: Option<PathBuf>,
-    #[arg(long, global = true)]
-    pub data_dir: Option<PathBuf>,
-    #[arg(long, global = true)]
-    pub bind: Option<SocketAddr>,
-    #[arg(long, global = true, action = clap::ArgAction::Set)]
-    pub development: Option<bool>,
-    #[arg(long, global = true)]
-    pub json: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Explicitly initialize a private data directory and first administrator.
-    Init {
-        #[arg(long, default_value = "admin")]
-        username: String,
-    },
-    /// Run a previously initialized instance.
-    Run,
-    /// Validate configuration without requiring initialized instance data.
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    /// Query the live service readiness; offline instances never report ready.
-    Status,
-    /// Validate initialized instance data, keys, and directories while offline.
-    Check,
-    /// Print the exact machine-readable binary release identity.
-    Identity,
-    /// Print the immutable browser asset inventory compiled into this binary.
-    WebAssets,
-    /// Verify an immutable release tree with the binary contained in that tree.
-    VerifyRelease(ReleaseRoot),
-    /// Manage the initialized local administrator.
-    Admin {
-        #[command(subcommand)]
-        command: AdminCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ConfigCommand {
-    Validate,
-}
-
-#[derive(Debug, Clone, clap::Args)]
-pub struct ReleaseRoot {
-    #[arg(long)]
+    #[arg(long, default_value = "/opt/isarmg/xsos")]
     pub root: PathBuf,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum AdminCommand {
-    /// Reset an existing administrator password, read from standard input.
-    ResetPassword {
-        #[arg(long)]
-        username: String,
-    },
 }
 
 #[derive(Clone)]
 pub struct ValidatedConfig {
+    pub root: PathBuf,
     pub bind: SocketAddr,
     pub database_url: String,
     pub administrator_origin: AdministratorOriginMode,
@@ -96,50 +37,39 @@ pub struct ValidatedConfig {
     pub retention: RetentionConfig,
     pub static_dir: Option<PathBuf>,
     pub log_level: String,
-    pub trusted_proxies: xcss::client_ip::TrustedProxies,
     pub data_dir: PathBuf,
     pub sources: BTreeMap<String, ConfigSource>,
 }
 
 impl ValidatedConfig {
-    pub fn from_runtime() -> anyhow::Result<Self> {
-        Self::from_sources(None, None, None, None)
-    }
+    pub fn from_root_sources(root: &Path, config: &Path) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            root.is_absolute()
+                && root != Path::new("/")
+                && root.components().all(|part| matches!(
+                    part,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )),
+            "root must be a normalized absolute directory"
+        );
+        let defaults = Settings {
+            data_dir: root.join("state"),
+            ..Settings::default()
+        };
 
-    pub fn from_sources(
-        config: Option<&Path>,
-        data_dir: Option<&Path>,
-        bind: Option<SocketAddr>,
-        development: Option<bool>,
-    ) -> anyhow::Result<Self> {
-        let config = selected_config_path(config)?;
-        let file = config
-            .as_deref()
-            .map(xcss::config::read_private_file)
-            .transpose()?;
-        let environment = xcss::config::read_environment(&ENVIRONMENT, |name| env::var(name).ok())?;
-        let mut command_line = Vec::new();
-        if let Some(path) = data_dir {
-            command_line.push(Override::new(
-                "/data_dir",
-                path.to_string_lossy().into_owned(),
-            ));
-        }
-        if let Some(bind) = bind {
-            command_line.push(Override::new("/bind", bind.to_string()));
-        }
-        if let Some(development) = development {
-            command_line.push(Override::new("/development", development));
-        }
+        let config = normalize_config_path(config)?;
+        let file = xcss::config::read_private_file(&config)?;
+        let environment = xcss::config::read_environment(ENVIRONMENT, |name| env::var(name).ok())?;
         let loaded = xcss::config::resolve_validated(
-            &Settings::default(),
-            file.as_deref(),
+            &defaults,
+            Some(&file),
             &environment,
-            &command_line,
+            &[],
             validate_intrinsic,
         )?;
         let settings = loaded.value;
         let data_dir = settings.data_dir;
+        validate_state_location(root, &data_dir)?;
         let database_url = format!("sqlite://{}", data_dir.join("xsos.sqlite3").display());
         crate::database_schema::database_path(&database_url)?;
         let bind = settings.bind;
@@ -172,6 +102,7 @@ impl ValidatedConfig {
             Duration::from_millis(settings.retention_yield_milliseconds),
         )?;
         Ok(Self {
+            root: root.to_path_buf(),
             bind,
             database_url,
             administrator_origin: cookie_mode,
@@ -179,7 +110,6 @@ impl ValidatedConfig {
             retention,
             static_dir,
             log_level: settings.log_level,
-            trusted_proxies: xcss::client_ip::TrustedProxies::parse(&settings.trusted_proxies)?,
             data_dir,
             sources: loaded.sources,
         })
@@ -193,7 +123,6 @@ struct Settings {
     bind: SocketAddr,
     development: bool,
     log_level: String,
-    trusted_proxies: Vec<String>,
     development_web_dir: Option<String>,
     telemetry_queue_capacity: usize,
     telemetry_batch_size: usize,
@@ -213,11 +142,10 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            data_dir: PathBuf::from("/var/lib/isarmg/xsos"),
+            data_dir: PathBuf::from("/opt/isarmg/xsos/state"),
             bind: "127.0.0.1:18105".parse().expect("valid default bind"),
             development: false,
             log_level: "info".into(),
-            trusted_proxies: Vec::new(),
             development_web_dir: None,
             telemetry_queue_capacity: 256,
             telemetry_batch_size: 64,
@@ -236,7 +164,7 @@ impl Default for Settings {
     }
 }
 
-const ENVIRONMENT: [EnvMapping<'static>; 19] = [
+const ENVIRONMENT: &[EnvMapping<'static>] = &[
     EnvMapping {
         variable: "XSOS_DATA_DIR",
         path: "/data_dir",
@@ -251,11 +179,6 @@ const ENVIRONMENT: [EnvMapping<'static>; 19] = [
         variable: "XSOS_DEVELOPMENT",
         path: "/development",
         kind: EnvValueKind::Boolean,
-    },
-    EnvMapping {
-        variable: "XSOS_TRUSTED_PROXIES",
-        path: "/trusted_proxies",
-        kind: EnvValueKind::Json,
     },
     EnvMapping {
         variable: "XSOS_LOG_LEVEL",
@@ -439,16 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn immutable_release_commands_require_an_explicit_root() {
-        let root = "/opt/isarmg/xsos/releases/0.12.0";
-        assert!(Cli::try_parse_from(["xsos", "run"]).is_ok());
-        assert!(Cli::try_parse_from(["xsos", "run", "--release-root", root]).is_err());
-        assert!(Cli::try_parse_from(["xsos", "verify-release", "--root", root]).is_ok());
-        assert!(Cli::try_parse_from(["xsos", "run", "--release-root"]).is_err());
-        assert!(Cli::try_parse_from(["xsos", "verify-release"]).is_err());
-    }
-
-    #[test]
     fn static_directory_is_absolute_and_exact() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("index.html"), "current").unwrap();
@@ -507,8 +420,6 @@ fn validate_intrinsic(
     ) {
         return Err(invalid("/log_level"));
     }
-    xcss::client_ip::TrustedProxies::parse(&settings.trusted_proxies)
-        .map_err(|_| invalid("/trusted_proxies"))?;
     for (path, value, min, max) in [
         (
             "/telemetry_queue_capacity",
@@ -600,11 +511,11 @@ mod precedence_contract_tests {
         let error = xcss::config::resolve_validated(
             &Settings::default(),
             Some(&file),
-            &[],
             &[Override::new(
                 "/telemetry_queue_capacity",
                 serde_json::json!(16),
             )],
+            &[],
             validate_intrinsic,
         )
         .err()
@@ -619,7 +530,7 @@ mod precedence_contract_tests {
     }
 }
 
-/// Normalize the CLI file authority before private reads and resource reporting.
+/// Normalize the required configuration path before private reads and reporting.
 pub fn normalize_config_path(path: &Path) -> anyhow::Result<PathBuf> {
     anyhow::ensure!(
         !path
@@ -637,13 +548,13 @@ mod unified_configuration_tests {
     fn explicit_missing_config_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.json");
-        assert!(ValidatedConfig::from_sources(Some(&missing), None, None, None).is_err());
+        assert!(ValidatedConfig::from_root_sources(directory.path(), &missing).is_err());
     }
     #[test]
     fn defaults_and_environment_belong_to_this_server() {
         let settings = Settings::default();
         assert!(!settings.development);
-        assert_eq!(settings.data_dir, PathBuf::from("/var/lib/isarmg/xsos"));
+        assert_eq!(settings.data_dir, PathBuf::from("/opt/isarmg/xsos/state"));
         assert!(
             ENVIRONMENT
                 .iter()
@@ -678,43 +589,7 @@ mod unified_configuration_tests {
             "XSOS_DATABASE_URL" | "XSOS_AUTHORIZATION_KEY"
         )));
     }
-    #[test]
-    fn log_level_and_trusted_proxies_follow_prefixed_environment_precedence() {
-        assert_eq!(Settings::default().log_level, "info");
-        assert!(Settings::default().trusted_proxies.is_empty());
-        let file = br#"{"log_level":"warn","trusted_proxies":["192.0.2.0/24"]}"#;
-        let environment = xcss::config::read_environment(&ENVIRONMENT, |name| match name {
-            "XSOS_LOG_LEVEL" => Some("debug".into()),
-            "XSOS_TRUSTED_PROXIES" => Some(r#"["127.0.0.1/32"]"#.into()),
-            _ => None,
-        })
-        .unwrap();
-        let loaded = xcss::config::resolve_validated(
-            &Settings::default(),
-            Some(file),
-            &environment,
-            &[],
-            validate_intrinsic,
-        )
-        .unwrap();
-        assert_eq!(loaded.value.log_level, "debug");
-        assert_eq!(loaded.value.trusted_proxies, ["127.0.0.1/32"]);
-        for file in [
-            br#"{"log_level":"private-invalid-filter"}"#.as_slice(),
-            br#"{"trusted_proxies":["invalid"]}"#.as_slice(),
-        ] {
-            assert!(
-                xcss::config::resolve_validated(
-                    &Settings::default(),
-                    Some(file),
-                    &[],
-                    &[],
-                    validate_intrinsic
-                )
-                .is_err()
-            );
-        }
-    }
+
     #[test]
     fn runtime_configuration_rejects_bootstrap_passwords() {
         let file = br#"{"bootstrap_admin_password":"never-persist-this"}"#;
@@ -730,24 +605,12 @@ mod unified_configuration_tests {
         );
     }
     #[test]
-    fn bind_precedence_is_cli_then_prefixed_environment_then_file() {
+    fn prefixed_environment_overrides_the_required_file() {
         let file = br#"{"bind":"127.0.0.1:19001"}"#;
-        let environment = xcss::config::read_environment(&ENVIRONMENT, |name| {
+        let environment = xcss::config::read_environment(ENVIRONMENT, |name| {
             (name == "XSOS_BIND").then(|| "127.0.0.1:19002".into())
         })
         .unwrap();
-        let loaded = xcss::config::resolve_validated(
-            &Settings::default(),
-            Some(file),
-            &environment,
-            &[Override::new("/bind", "127.0.0.1:19003")],
-            validate_intrinsic,
-        )
-        .unwrap();
-        assert_eq!(
-            loaded.value.bind,
-            "127.0.0.1:19003".parse::<SocketAddr>().unwrap()
-        );
         let loaded = xcss::config::resolve_validated(
             &Settings::default(),
             Some(file),
@@ -763,86 +626,67 @@ mod unified_configuration_tests {
     }
 }
 
-/// An omitted default file is optional; explicit files and unreadable defaults fail closed.
-pub fn selected_config_path(config: Option<&Path>) -> anyhow::Result<Option<PathBuf>> {
-    match config {
-        Some(path) => Ok(Some(normalize_config_path(path)?)),
-        None => {
-            let path = PathBuf::from("/etc/isarmg/xsos/config.json");
-            existing_default_config(path)
-        }
-    }
-}
-
 #[cfg(test)]
-mod initialization_cli_tests {
+mod runtime_cli_tests {
     use super::*;
     #[test]
-    fn explicit_username_and_global_configuration_are_accepted() {
-        for args in [
-            vec![
-                "init",
-                "--username",
-                "admin",
-                "--config",
-                "/tmp/config.json",
-            ],
-            vec![
-                "--config",
-                "/tmp/config.json",
-                "init",
-                "--username",
-                "admin",
-            ],
+    fn server_has_only_root_based_runtime_arguments() {
+        assert!(Cli::try_parse_from(["xsos", "--root", "/srv/xsos"]).is_ok());
+        for removed in [
+            "init",
+            "check",
+            "status",
+            "config",
+            "admin",
+            "identity",
+            "verify-release",
+            "run",
         ] {
-            assert!(Cli::try_parse_from(std::iter::once("xsos").chain(args)).is_ok());
+            assert!(Cli::try_parse_from(["xsos", removed]).is_err());
         }
-        assert!(
-            Cli::try_parse_from([
-                "xsos",
-                "admin",
-                "reset-password",
-                "--username",
-                "admin",
-                "--database-url",
-                "sqlite:///tmp/xsos.sqlite3"
-            ])
-            .is_err()
-        );
-        assert!(Cli::try_parse_from(["xsos", "check"]).is_ok());
-        assert!(
-            Cli::try_parse_from([
-                "xsos",
-                "admin",
-                "reset-password",
-                "--username",
-                "admin",
-                "--data-dir",
-                "/tmp/xsos"
-            ])
-            .is_ok()
-        );
-    }
-}
-
-fn existing_default_config(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => Ok(Some(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
     }
 }
 
 #[cfg(all(test, unix))]
-mod default_configuration_tests {
+mod required_configuration_tests {
     use super::*;
     #[test]
-    fn dangling_default_symlink_is_not_treated_as_an_absent_file() {
+    fn a_linked_required_configuration_never_falls_back_to_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
-        assert!(existing_default_config(path.clone()).unwrap().is_none());
         std::os::unix::fs::symlink(directory.path().join("missing.json"), &path).unwrap();
-        let selected = existing_default_config(path).unwrap().unwrap();
-        assert!(xcss::config::read_private_file(&selected).is_err());
+        assert!(ValidatedConfig::from_root_sources(directory.path(), &path).is_err());
     }
+}
+
+fn validate_state_location(root: &Path, state: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        state.is_absolute()
+            && state != Path::new("/")
+            && state.components().all(|part| matches!(
+                part,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )),
+        "state paths must be normalized absolute directories"
+    );
+    anyhow::ensure!(
+        !root.starts_with(state),
+        "state directory cannot contain the installation root"
+    );
+    for name in [
+        "config",
+        "logs",
+        "run",
+        "bin",
+        "libexec",
+        "share",
+        "maintenance",
+    ] {
+        let protected = root.join(name);
+        anyhow::ensure!(
+            !state.starts_with(&protected) && !protected.starts_with(state),
+            "state directory overlaps a protected installation path"
+        );
+    }
+    Ok(())
 }

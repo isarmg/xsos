@@ -8,7 +8,6 @@ pub mod http;
 pub mod model;
 pub mod pagination;
 mod pairing_admission;
-pub mod release_bundle;
 pub mod release_contract;
 pub mod retention;
 pub mod secrets;
@@ -22,3 +21,5 @@ pub fn token_hash(token: &str) -> String {
 mod hardware_validation;
 
 pub mod web_assets;
+
+pub mod offline;

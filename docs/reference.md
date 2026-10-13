@@ -6,16 +6,15 @@
 
 
 
-Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制由可信 reverse proxy 负责。代理必须保留
-浏览器发送的单一 `Host`、`Origin` 与 `Sec-Fetch-Site` 事实，不能注入第二个同名字段，也不能把公网请求
-直接转给一个可被旁路访问的监听地址。登录来源限流读取 Axum 的 TCP peer `ConnectInfo`，当前不信任
-`Forwarded` 或 `X-Forwarded-For`；如果代理复用一个后端源地址，来源桶看到的是代理地址而非公网客户端。
+Server 只处理标准 HTTP 与业务协议，不识别代理或访客 IP。请求必须提供单一且一致的
+`Host`、`Origin` 与 `Sec-Fetch-Site`。管理员认证保留密码计算和请求体的全局容量限制；
+配对限额仅记录数据库确认的实例或配对事务，遥测速率按已经认证的 Host 计数。
 
 | 路径与方法 | 当前调用方/身份 | 请求边界 | 成功结果与当前限制 |
 |---|---|---|---|
 | `GET /healthz` | 公开 | 空响应体 | 存活 204，不健康 503 |
 | `GET /readyz` | 公开 | 仅最小就绪事实 | `200/503`，精确 `{"ready":bool}`；任务与数据库详情仅在受保护诊断中提供 |
-| `POST /api/v1/auth/login` | 浏览器公开入口 | 16 KiB；exact `{username,password}`；同源；TCP peer 与规范 username 双重限流 | `200` + exact Session；设置 Cookie；不知道账户时仍做 dummy Argon2；成功响应 `no-store` |
+| `POST /api/v1/auth/login` | 浏览器公开入口 | 16 KiB；exact `{username,password}`；同源；有界密码验证并发 | `200` + exact Session；设置 Cookie；不知道账户时仍做 dummy Argon2；成功响应 `no-store` |
 | `GET /api/v1/auth/session` | 管理员 Session Cookie | 不接受业务正文；不要求 CSRF | 轮换一个 CSRF token 并返回 exact Session；成功响应 `no-store` |
 | `POST /api/v1/auth/logout` | 管理员 Session + CSRF + 同源 | 无业务正文 | 撤销当前 Session、删除其 CSRF 摘要、清除 Cookie；成功响应 `204 no-store` |
 | `GET /api/v1/monitoring/hosts` | 管理员 Session | 可选 `cursor` 或 `host_id`，两者不混用 | 按实例名称字母数字顺序返回最多 50 条 Host summary、全局统计及前后游标；`host_id` 可定位单台主机；React 总览与实例/详情入口共同使用 |
@@ -26,10 +25,10 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 | `DELETE /api/v1/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | canonical UUID；pending 调用转 cancelled；对 cancelled 重试保持状态与历史数据 | `204`；不存在为 404，active 为 409；永久删除仅由独立 `/delete` 路由执行 |
 | `POST /api/v1/xsoc/activate-admin` | 管理员 Session + CSRF + 同源 | 16 KiB 管理上限；exact request ID + activation code | 与 capability 激活进入同一事务；React 配对确认流程调用 |
 | `DELETE /api/v1/monitoring/managed-instances/{host_id}` | 管理员 Session + CSRF + 同源 | canonical UUID | `204`；永久级联删除关联数据 |
-| `POST /api/v1/xsoc/pairing-requests` | 未配对 Client | Client 路由组 512 KiB；strict Host、bearer/polling-secret SHA-256；来源/设备/容量限流 | 创建或幂等恢复 pairing request；返回 activation URL，成功 `no-store` |
-| `GET /api/v1/xsoc/pairing-requests/{request_id}` | 持有 request ID 的调用方 | canonical UUID；来源/请求限流 | 只暴露 OS/arch/version/status/expiry 公共摘要；成功 `no-store` |
+| `POST /api/v1/xsoc/pairing-requests` | 未配对 Client | Client 路由组 512 KiB；strict Host、bearer/polling-secret SHA-256；全局 16 个配对工作槽与数据库容量限制 | 创建或幂等恢复 pairing request；返回 activation URL，成功 `no-store` |
+| `GET /api/v1/xsoc/pairing-requests/{request_id}` | 持有 request ID 的调用方 | canonical UUID；仅有效配对事务进入轮询限额 | 只暴露 OS/arch/version/status/expiry 公共摘要；成功 `no-store` |
 | `POST /api/v1/xsoc/pairing-requests/{request_id}/status` | Client 的 `Pairing <polling_secret>` | 512 KiB 组上限；secret 32..256 字符且无 whitespace | waiting/active/denied/expired 与可空 instance ID；成功 `no-store` |
-| `POST /api/v1/xsoc/activate` | 持有实例 authorization code 的 capability 调用方 | 512 KiB 组上限；来源/请求限流；不是管理员 Session | 激活同一事务状态机；授权码错误/取消/跨实例使用严格失败；短期设备请求仍有超时保护；成功 `no-store` |
+| `POST /api/v1/xsoc/activate` | 持有实例 authorization code 的 capability 调用方 | 512 KiB 组上限；仅有效授权确认的实例进入激活限额；不是管理员 Session | 激活同一事务状态机；授权码错误/取消/跨实例使用严格失败；短期设备请求仍有超时保护；成功 `no-store` |
 | `PATCH /api/v1/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | 实例名称 | `204`，更新名称 |
 | `DELETE /api/v1/monitoring/client-instances/{request_id}/delete` | 管理员 Session + CSRF + 同源 | canonical UUID | `204`，永久删除实例 |
 | `GET /api/v1/monitoring/logs/calendar` | 管理员 Session | 无业务正文 | UTC 的当前日期 |
@@ -53,16 +52,16 @@ xcss `ErrorEnvelope`；健康端点和静态文件不在这个 envelope 范围�
 
 
 
-Server 仅在显式 `init` 创建当前库。`product_metadata` 必须精确绑定 application `xsos`、格式版本 `1.0.0`、
+独立 XSSI setup 只在初次安装创建当前库。`product_metadata` 必须精确绑定 application `xsos`、格式版本 `1.0.0`、
 schema revision `1` 与 SHA-256
 `cb768892031e80900b95395aae25397fac4c37f3aac8b912d911d65c6a277afe`；软件补丁版本由发行身份中的 `version` 独立表达，现场 `sqlite_schema` 重新计算也
 必须一致。当前 DDL 中管理员列是 `_common_administrators.username`，没有 `email` 或 role 列；DDL 自身约束 canonical
-username、非空 password hash、`active IN (0,1)`，`run`/`config validate` 加载已有行时再用 xcss
+username、非空 password hash、`active IN (0,1)`，运行入口与独立 setup 检查已有行时再用 xcss
 primitive 验证 username 和完整 current Argon2id 参数；DDL 还要求 `session_version > 0`，形成存储形状与
 密码策略双层 fail-closed。数据库/
 父目录/锁的
 链接、特殊文件和硬链接
-别名在 Linux 通过 `openat2` 锚定检查。`check` 还通过 xcss 适配器执行完整
+别名在 Linux 通过 `openat2` 锚定检查。独立 setup 的只读检查通过 xcss 适配器执行完整
 `PRAGMA integrity_check` 与 `foreign_key_check`；失败只报告 degraded 并退出，不在产品内修库。
 
 

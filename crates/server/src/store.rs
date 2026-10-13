@@ -93,7 +93,7 @@ pub async fn require_administrator(pool: &SqlitePool) -> anyhow::Result<()> {
     let store = xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone());
     anyhow::ensure!(
         store.administrator_count().await? > 0,
-        "service is not initialized; run init to create the first administrator"
+        "service is not initialized; complete installation with xssi"
     );
     store.validate_all_administrators().await?;
     Ok(())
@@ -686,6 +686,28 @@ pub async fn pairing_request_exists(pool: &SqlitePool, request_id: Uuid) -> anyh
     .fetch_one(pool)
     .await?;
     Ok(exists != 0)
+}
+
+/// Return a persisted invite identity only after both the request and capability
+/// match. Invalid or expired anonymous input never creates admission bucket keys.
+pub async fn verified_activation_instance(
+    pool: &SqlitePool,
+    request_id: Uuid,
+    activation_hash: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT i.instance_id FROM client_instance_invites i CROSS JOIN client_pairing_requests p \
+         WHERE p.request_id=? AND i.activation_code_hash=? \
+         AND ((p.status='pending' AND p.expires_at>? AND i.status='pending') \
+           OR (p.status='active' AND i.status='active' \
+             AND p.invite_id=i.invite_id AND p.instance_id=i.instance_id))",
+    )
+    .bind(request_id)
+    .bind(activation_hash)
+    .bind(Utc::now())
+    .fetch_optional(pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub enum ActivateResult {

@@ -12,7 +12,7 @@ use xcss::schema_identity::SchemaRow;
 use xcss::sqlite::{PRODUCT_METADATA_DDL, PoolOptions};
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 pub const APPLICATION: &str = "xsos";
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -196,6 +196,21 @@ pub fn validate_configuration_database(database_url: &str) -> anyhow::Result<()>
     validate_read_only(&database_path(database_url)?)
 }
 
+pub(crate) fn validate_existing_file(path: &Path) -> anyhow::Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("database does not exist: {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "database must be a regular file"
+    );
+    #[cfg(unix)]
+    ensure!(
+        metadata.nlink() == 1,
+        "database must have exactly one hard link"
+    );
+    Ok(())
+}
+
 /// Persistent admission and source-preserving validation share one physical byte boundary.
 pub const DATABASE_BYTE_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
 
@@ -213,9 +228,14 @@ pub fn connection_limits() -> xcss::sqlite::ConnectionLimits {
 /// Capture before this process acquires any original SQLite connection.
 pub async fn validation_snapshot(
     path: PathBuf,
+    temporary_root: PathBuf,
 ) -> anyhow::Result<xcss::sqlite::ValidationSnapshotPool> {
     let snapshot = tokio::task::spawn_blocking(move || {
-        xcss::sqlite::ValidationSnapshot::capture_with_limits(path, snapshot_limits())
+        xcss::sqlite::ValidationSnapshot::capture_with_limits_in(
+            path,
+            snapshot_limits(),
+            temporary_root,
+        )
     })
     .await
     .context("join private database validation capture")??;

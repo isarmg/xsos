@@ -1,7 +1,6 @@
 use axum::{
     Router,
     body::Body,
-    extract::ConnectInfo,
     http::{Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
@@ -66,13 +65,7 @@ fn request(method: Method, uri: &str, cookie: Option<&str>, csrf: Option<&str>) 
     } else {
         Body::empty()
     };
-    let mut request = builder.body(body).expect("request");
-    request.extensions_mut().insert(ConnectInfo(
-        "192.0.2.10:41000"
-            .parse::<std::net::SocketAddr>()
-            .expect("peer address"),
-    ));
-    request
+    builder.body(body).expect("request")
 }
 
 #[tokio::test]

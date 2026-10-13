@@ -38,6 +38,77 @@ fn host(id: Uuid, os: &str) -> HostIdentity {
 }
 
 #[tokio::test]
+async fn activation_admission_uses_only_the_matching_persisted_instance() {
+    let path = database_path();
+    let pool = open_database(&path).await;
+    store::initialize_empty(&pool).await.unwrap();
+    let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
+    let (first, code) = store::create_invite(&pool, &secrets, "first", "admin")
+        .await
+        .unwrap();
+    let store::CreateInviteResult::Created(first) = first else {
+        panic!("fixture invite was not created")
+    };
+    let first_instance = Uuid::parse_str(&first.instance_id).unwrap();
+    let first_hash = token_hash(&code.unwrap());
+    let (_, other_code) = store::create_invite(&pool, &secrets, "other", "admin")
+        .await
+        .unwrap();
+    let other_hash = token_hash(&other_code.unwrap());
+    let request = ClientPairingRequest {
+        protocol_version: xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
+        mode: ClientPairingMode::Fresh,
+        host: host(Uuid::new_v4(), "linux"),
+        token_hash: token_hash("admission-test-client"),
+        polling_secret_hash: token_hash("admission-test-polling"),
+    };
+    let store::CreatePairingResult::Ready { request_id, .. } =
+        store::create_pairing(&pool, &request).await.unwrap()
+    else {
+        panic!("fixture pairing was not created")
+    };
+    assert_eq!(
+        store::verified_activation_instance(&pool, Uuid::new_v4(), &first_hash)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store::verified_activation_instance(&pool, request_id, &token_hash("invalid"))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store::verified_activation_instance(&pool, request_id, &first_hash)
+            .await
+            .unwrap(),
+        Some(first_instance)
+    );
+    assert!(matches!(
+        store::activate(&pool, &secrets, request_id, &first_hash, "fixture")
+            .await
+            .unwrap(),
+        store::ActivateResult::Active(_)
+    ));
+    assert_eq!(
+        store::verified_activation_instance(&pool, request_id, &first_hash)
+            .await
+            .unwrap(),
+        Some(first_instance)
+    );
+    assert_eq!(
+        store::verified_activation_instance(&pool, request_id, &other_hash)
+            .await
+            .unwrap(),
+        None,
+        "a credential for another instance cannot consume this active transaction's quota"
+    );
+    pool.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
 async fn instance_list_returns_every_instance_in_case_insensitive_name_order() {
     let path = database_path();
     let pool = open_database(&path).await;

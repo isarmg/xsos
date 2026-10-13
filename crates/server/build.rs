@@ -20,6 +20,18 @@ fn locked_xcss_revision(lockfile: &str) -> String {
             locked.to_owned()
         })
         .collect::<BTreeSet<_>>();
+    if revisions.is_empty() {
+        assert_eq!(
+            env::var("PROFILE").as_deref(),
+            Ok("debug"),
+            "release builds require a source-bound xcss dependency"
+        );
+        assert!(
+            env::var_os("XSSI_BUILD_METADATA_DIR").is_none(),
+            "release metadata cannot describe an unbound foundation"
+        );
+        return "unbound".into();
+    }
     assert_eq!(
         revisions.len(),
         1,
@@ -29,6 +41,7 @@ fn locked_xcss_revision(lockfile: &str) -> String {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=XSSI_BUILD_METADATA_DIR");
     let target = env::var("TARGET").expect("Cargo must provide TARGET");
     target_gate::main();
     let product_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -64,4 +77,80 @@ fn main() {
         "cargo:rerun-if-changed={}",
         product_root.join("release.json").display()
     );
+    emit_offline_metadata();
+}
+
+fn emit_offline_metadata() {
+    use sha2::{Digest, Sha256};
+    use xcss::contracts::{StateContract, StateResource, StateResourceKind, StateSchemaIdentity};
+    let Some(destination) = std::env::var_os("XSSI_BUILD_METADATA_DIR") else {
+        return;
+    };
+    let destination = std::path::PathBuf::from(destination);
+    assert!(
+        destination.is_absolute() && destination.is_dir(),
+        "explicit metadata destination must exist and be absolute"
+    );
+    let revision = std::env::var("XSOS_SOURCE_REVISION")
+        .expect("release metadata requires a source-bound build");
+    let hash = "cb768892031e80900b95395aae25397fac4c37f3aac8b912d911d65c6a277afe";
+    let schema =
+        xcss::contracts::SchemaIdentity::new("xsos", "1.0.0", 1, hash).expect("schema identity");
+    let contract = StateContract {
+        contract_version: xcss::contracts::STATE_CONTRACT_VERSION,
+        application: "xsos".into(),
+        application_version: std::env::var("CARGO_PKG_VERSION").unwrap(),
+        source_revision: revision.clone(),
+        schema: Some(StateSchemaIdentity {
+            revision: 1,
+            sha256: hash.into(),
+        }),
+        maintenance_locks: vec![
+            ".state-instance.lock".into(),
+            ".state-maintenance.lock".into(),
+        ],
+        resources: vec![
+            StateResource {
+                name: "state".into(),
+                kind: StateResourceKind::DataTree,
+                required: true,
+            },
+            StateResource {
+                name: "config".into(),
+                kind: StateResourceKind::Configuration,
+                required: true,
+            },
+        ],
+        external_requirements: vec![],
+        companion_contracts: vec![],
+    };
+    contract.validate().expect("current state contract");
+    let bytes = serde_json::to_vec(&contract).unwrap();
+    let digest = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let identity = xcss::contracts::ReleaseIdentity {
+        product: "xsos".into(),
+        version: std::env::var("CARGO_PKG_VERSION").unwrap(),
+        source_revision: revision,
+        target: xcss::server_target::SERVER_TARGET_TRIPLE.into(),
+        state_contract_sha256: digest,
+    };
+    identity.validate().expect("release identity");
+    std::fs::write(
+        destination.join("xsos-identity.json"),
+        serde_json::to_vec(&identity).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        destination.join("xsos-schema.json"),
+        serde_json::to_vec(&schema).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(destination.join("xsos-state-contract.json"), bytes).unwrap();
+    let generated = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap())
+        .join("xcss-web-assets.rs.manifest.json");
+    std::fs::copy(generated, destination.join("xsos-web-assets.json"))
+        .expect("copy exact embedded Web manifest");
 }

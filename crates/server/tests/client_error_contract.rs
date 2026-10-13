@@ -270,13 +270,10 @@ async fn framework_api_rejections_are_replaced_by_the_same_strict_envelope() {
 async fn missing_pairing_status_uses_the_dedicated_transaction_code() {
     let fixture = fixture().await;
     let request_id = Uuid::new_v4();
-    let mut request = Request::post(format!("/api/v1/xsoc/pairing-requests/{request_id}/status"))
+    let request = Request::post(format!("/api/v1/xsoc/pairing-requests/{request_id}/status"))
         .header(header::AUTHORIZATION, format!("Pairing {}", "a".repeat(64)))
         .body(Body::empty())
         .unwrap();
-    request.extensions_mut().insert(axum::extract::ConnectInfo(
-        "127.0.0.1:42000".parse::<std::net::SocketAddr>().unwrap(),
-    ));
     let response = fixture.app.clone().oneshot(request).await.unwrap();
     let (status, _, body) = response_contract(response).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

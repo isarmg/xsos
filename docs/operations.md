@@ -1,10 +1,11 @@
-# xsos 运维入口
+# Installation and operation
 
-- [首次安装](server-release-readme.md)：校验发行包、配置、初始化、启动与 HTTPS
-- [日常运维](administration.md)：启停、日志、数据库检查、容量与账号
-- [配置参考](configuration.md)：完整环境变量
-- [排查问题](troubleshooting.md)：就绪、登录、报告与存储问题
-- [HTTP 与存储参考](reference.md)：接口、身份和保留细节
-- [客户端安装](https://github.com/isarmg/xsoc/blob/main/docs/platform-setup.md)：在被监控主机安装 xsoc
+Use the signed release package with the shared [XSSI](https://github.com/isarmg/xssi) installer. Verify the package against an independently supplied release public key and fingerprint before executing its scripts or helper. The installer prepares the service account, directories, configuration, initial administrator and systemd unit. Host operations belong to the scripts.
 
-服务端使用 Linux AMD64 GNU、systemd 和一个 SQLite 数据库。运行与维护命令使用相同服务账户和环境；初次部署完成后，日常工作从服务状态与最新报告开始。
+The default installation root is `/opt/isarmg/xsos`. Runtime invocation is `xsos --root ROOT`. The server reads `ROOT/config/config.json`, opens existing initialized state and starts HTTP. Startup never creates administrator accounts or installation secrets.
+
+An upgrade first downloads and verifies the complete package while the existing service is running. Its script then stops all writers and delegates the locked backup, explicit source/target schema migration and atomic package switch to XSSC. The script starts the resulting service and checks readiness; failure restores the backed-up generation before returning to the previous service. Media/file paths are preserved instead of silently moved.
+
+Offline configuration checks and administrator password resets use the signed `libexec/setup` helper through XSSI maintenance scripts. Runtime HTTP administrator and health endpoints remain available. Passwords use the existing administrator hash policy; resetting an administrator password preserves instance authorization keys.
+
+Uninstallation and removal of data are performed by the operator.
