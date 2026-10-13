@@ -117,8 +117,18 @@ jobs:
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
+          server_version="$(python3 - <<'PY'
+          import json, tomllib
+          with open('Cargo.toml', 'rb') as manifest:
+              version = tomllib.load(manifest)['workspace']['package']['version']
+          with open('release.json', encoding='utf-8') as manifest:
+              if json.load(manifest)['version'] != version:
+                  raise SystemExit('Server package and release manifest versions differ.')
+          print(version)
+          PY
+          )"
           cargo pkgid --locked -p xsos \
-            | grep -F '#xsos@1.0.2'
+            | grep -F "#xsos@${server_version}"
           cargo pkgid --locked -p xsos-protocol | grep -F '#xsos-protocol@1.0.0'
       - name: Install Node.js for embedded browser assets
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
