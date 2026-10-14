@@ -289,7 +289,7 @@ function LatestDevices({ report, detailsPending, instanceOverview, monitoringSta
 
 function deviceCategories(report: ClientReport): InformationCategory[] {
   const hardware = report.system.hardware;
-  const { interfaces, unmatchedHardware } = networkDisplayRecords(report.system.networks, hardware?.networks ?? []);
+  const { interfaces, unmatchedHardware } = networkDisplayRecords(report.system.networks, hardware?.networks.map(record => ({ ...record, hardware_collected_at: hardware.collected_at })) ?? []);
   const groups: Array<{ id: string; title: string; records: Record<string, unknown>[]; empty: string }> = [
     ...([
       ["thunderbolt", t("雷电 / USB4", "Thunderbolt / USB4")],
@@ -309,9 +309,9 @@ function deviceCategories(report: ClientReport): InformationCategory[] {
     { id: "gpus", title: t("显卡", "GPUs"), records: gpuDisplayRecords(report.system.gpus), empty: t("未发现显卡", "No GPUs reported") },
   ];
   return [
-    { id: "cpu", label: "CPU", content: <div className="host-device-grid"><SnapshotCard title="CPU" showTitle={false} record={{ ...report.system.cpu, ...(hardware?.cpu ?? {}) }} /></div> },
+    { id: "cpu", label: "CPU", content: <div className="host-device-grid"><SnapshotCard title="CPU" showTitle={false} record={{ ...report.system.cpu, ...(hardware?.cpu ?? {}), ...(hardware ? { hardware_collected_at: hardware.collected_at } : {}) }} /></div> },
     { id: "memory", label: t("内存", "RAM"), content: <><div className="host-device-grid"><SnapshotCard title={t("内存", "RAM")} showTitle={false} record={report.system.memory} /></div>{hardware?.memory_modules?.length ? <div className="host-device-grid">{hardware.memory_modules.map((module, index) => <SnapshotCard key={String(module.source) + ":" + String(module.id)} title={module.locator ?? module.model ?? t("内存模块 {0}", "Memory module {0}", [String(index + 1)])} record={{ ...module, ...(hardware.inventory_collected_at ? { collected_at: hardware.inventory_collected_at } : {}) }} />)}</div> : <p className="host-device-empty">{t("当前报告未提供内存模块规格，请查看采集诊断。", "No memory module specifications in the current report; see collection diagnostics.")}</p>}</> },
-    { id: "physical-networks", label: t("网络硬件", "Network hardware"), content: hardware?.physical_networks?.length ? <div className="host-device-grid">{hardware.physical_networks.map(adapter => <SnapshotCard key={String(adapter.source) + ":" + String(adapter.id)} title={adapter.name ?? adapter.id} record={adapter} />)}</div> : <p className="host-device-card host-device-empty">{t("当前报告未提供可确认的物理网卡信息。", "The current report does not provide verified physical network adapter information.")}</p> },
+    { id: "physical-networks", label: t("网络硬件", "Network hardware"), content: hardware?.physical_networks?.length ? <div className="host-device-grid">{hardware.physical_networks.map(adapter => <SnapshotCard key={String(adapter.source) + ":" + String(adapter.id)} title={adapter.name ?? adapter.id} record={{ ...adapter, hardware_collected_at: hardware.collected_at }} />)}</div> : <p className="host-device-card host-device-empty">{t("当前报告未提供可确认的物理网卡信息。", "The current report does not provide verified physical network adapter information.")}</p> },
     ...groups.map(group => ({ id: group.id, label: group.title, content: group.records.length ? <div className="host-device-grid">{group.records.map((record, recordIndex) => <SnapshotCard key={`${group.id}-${recordIndex}`} title={record.name ?? record.label ?? record.id ?? `${group.title} ${recordIndex + 1}`} record={record} />)}</div> : <p className="host-device-card host-device-empty">{group.empty}</p> })),
     { id: "diagnostics", label: t("采集能力与诊断", "Collection capabilities and diagnostics"), content: report.capabilities.length ? <div className="host-device-grid">{report.capabilities.map(capability => <article className="host-device-card" key={capability.name}><h4>{displayLabel(capability.name)}</h4><dl className="host-device-details"><dt>{t("状态", "Status")}</dt><dd>{capability.available ? t("可用", "Available") : t("不可用", "Unavailable")}</dd><dt>{t("来源", "Source")}</dt><dd>{capability.source}</dd>{capability.error_kind && <><dt>{t("原因", "Reason")}</dt><dd>{displayLabel(capability.error_kind)}</dd></>}{capability.message && <><dt>{t("说明", "Details")}</dt><dd>{capability.message}</dd></>}</dl></article>)}</div> : <p className="host-device-card host-device-empty">{t("当前报告没有采集能力信息。", "The current report has no collection capability information.")}</p> },
   ];
@@ -368,6 +368,7 @@ function SnapshotCard({ title, record, showTitle = true, framed = true }: { titl
 }
 
 const metricLabels: Record<string, readonly [string, string]> = {
+  hardware_collected_at: ["硬件采样时间", "Hardware sampled at"],
   module_version: ["模块 / 固件版本", "Module / firmware version"],
   locator: ["插槽 / 位置", "Slot / location"], memory_type: ["内存代际", "Memory generation"], form_factor: ["封装类型", "Form factor"], capacity_bytes: ["模块容量", "Module capacity"],
   speed_mt_s: ["标称传输速率", "Rated transfer rate"], configured_speed_mt_s: ["配置传输速率", "Configured transfer rate"], reported_speed: ["系统报告速率", "Reported rate"],
@@ -391,7 +392,7 @@ function metricLabel(key: string) { const label = Object.hasOwn(metricLabels, ke
 function formatMetricValue(key: string, value: unknown): string {
   if (value === null) return t("不可用", "Unavailable");
   if (Array.isArray(value)) return value.length ? value.map(item => item === null ? t("不可用", "Unavailable") : typeof item === "number" ? `${item.toFixed(1)}${key.includes("percent") ? "%" : key.endsWith("_mhz") ? " MHz" : ""}` : String(item)).join(" · ") : t("无", "None");
-  if (key === "collected_at" && typeof value === "string") return formatTime(value);
+  if ((key === "collected_at" || key === "hardware_collected_at") && typeof value === "string") return formatTime(value);
   const unit = ({fan_rpm:"RPM",voltage_volts:"V",current_amps:"A",energy_joules:"J",link_speed_mbps:"Mbps",speed_mbps:"Mbps",speed_mt_s:"MT/s",configured_speed_mt_s:"MT/s"} as Record<string,string>)[key];
   if (unit && typeof value === "number") return `${value.toLocaleString(getLocale())} ${unit}`;
   if (typeof value === "boolean") return value ? t("是", "Yes") : t("否", "No");

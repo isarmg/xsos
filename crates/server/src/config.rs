@@ -462,6 +462,34 @@ mod unified_configuration_tests {
         );
     }
     #[test]
+    fn coupled_environment_overrides_are_validated_as_one_source() {
+        let environment = xcss::config::read_environment(ENVIRONMENT, |name| match name {
+            "XSOS_TELEMETRY_QUEUE_CAPACITY" => Some("32".into()),
+            "XSOS_TELEMETRY_BATCH_SIZE" => Some("16".into()),
+            _ => None,
+        })
+        .unwrap();
+        let loaded = xcss::config::resolve_validated(
+            &Settings::default(),
+            Some(b"{}"),
+            &environment,
+            &[],
+            validate_intrinsic,
+        )
+        .unwrap();
+        assert_eq!(loaded.value.telemetry_queue_capacity, 32);
+        assert_eq!(loaded.value.telemetry_batch_size, 16);
+        assert_eq!(
+            loaded.sources["/telemetry_queue_capacity"],
+            ConfigSource::Environment
+        );
+        assert_eq!(
+            loaded.sources["/telemetry_batch_size"],
+            ConfigSource::Environment
+        );
+    }
+
+    #[test]
     fn prefixed_environment_overrides_the_required_file() {
         let file = br#"{"bind":"127.0.0.1:19001"}"#;
         let environment = xcss::config::read_environment(ENVIRONMENT, |name| {
