@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "xsos"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "xsos-protocol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "serde",

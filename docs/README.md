@@ -17,6 +17,6 @@ xsos 为管理员提供自托管 Web 管理台，服务端运行于 Linux AMD64 
 - [部署运维](operations.md)与[开发指南](development.md)：构建、测试、打包
 - [实现概览](architecture.md)与[学习路线](beginner-guide/README.md)：理解协议和持久化
 - [功能范围](feature-inventory-and-tradeoffs.md)、[公共库](common-support.md)、[仓库关系](repository-boundary.md)与[原生接口审查](unsafe-audit.md)
-- [当前 1.0.0 发行说明](releases/1.0.0.md)
+- [当前 1.0.1 发行说明](releases/1.0.1.md)
 
 指标含义见[硬件监控](hardware-monitoring.md)，接口与数据细节见[参考](reference.md)。
