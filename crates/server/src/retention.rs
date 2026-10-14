@@ -17,22 +17,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-pub const MIN_RAW_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
-pub const MAX_RAW_RETENTION: Duration = Duration::from_secs(365 * 24 * 60 * 60);
-pub const MAX_AGGREGATE_RETENTION: Duration = Duration::from_secs(3_650 * 24 * 60 * 60);
-pub const MIN_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
-pub const MAX_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-pub const MAX_RETENTION_BATCH_SIZE: usize = 512;
-pub const MAX_RETENTION_TRANSACTIONS: usize = 30;
-pub const MAX_RETENTION_RUN_TIME: Duration = Duration::from_secs(10);
-pub const MAX_RETENTION_YIELD: Duration = Duration::from_millis(100);
-pub const DEFAULT_RAW_RETENTION_DAYS: u64 = 7;
-pub const DEFAULT_AGGREGATE_RETENTION_DAYS: u64 = 365;
-pub const DEFAULT_MAINTENANCE_INTERVAL_SECONDS: u64 = 300;
-pub const DEFAULT_RETENTION_BATCH_SIZE: usize = 256;
-pub const DEFAULT_RETENTION_TRANSACTIONS: usize = 12;
-pub const DEFAULT_RETENTION_RUN_MILLISECONDS: u64 = 2_000;
-pub const DEFAULT_RETENTION_YIELD_MILLISECONDS: u64 = 10;
+pub use crate::retention_defaults::*;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const METRIC_NAMES: [&str; 15] = [
@@ -92,11 +77,12 @@ impl RetentionConfig {
             "retention batch size must be between 1 and {MAX_RETENTION_BATCH_SIZE}"
         );
         anyhow::ensure!(
-            (3..=MAX_RETENTION_TRANSACTIONS).contains(&max_transactions_per_run),
+            (MIN_RETENTION_TRANSACTIONS..=MAX_RETENTION_TRANSACTIONS)
+                .contains(&max_transactions_per_run),
             "retention transactions per run must be between 3 and {MAX_RETENTION_TRANSACTIONS}"
         );
         anyhow::ensure!(
-            max_run_time >= Duration::from_millis(100)
+            max_run_time >= MIN_RETENTION_RUN_TIME
                 && max_run_time <= MAX_RETENTION_RUN_TIME
                 && max_run_time < maintenance_interval,
             "retention run time must be 100ms-10s and shorter than its interval"

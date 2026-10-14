@@ -7,7 +7,7 @@
 
 
 Server 只处理标准 HTTP 与业务协议，不识别代理或访客 IP。请求必须提供单一且一致的
-`Host`、`Origin` 与 `Sec-Fetch-Site`。管理员认证保留密码计算和请求体的全局容量限制；
+`Host`、`Origin` 与 `Sec-Fetch-Site`。管理员认证通过公共机制按实际数据库限制每 60 秒 60 次登录尝试，成功不清空计数、超额拒绝不延长窗口；保留密码计算和请求体的全局容量限制；
 配对限额仅记录数据库确认的实例或配对事务，遥测速率按已经认证的 Host 计数。
 
 | 路径与方法 | 当前调用方/身份 | 请求边界 | 成功结果与当前限制 |
@@ -52,7 +52,7 @@ xcss `ErrorEnvelope`；健康端点和静态文件不在这个 envelope 范围�
 
 
 
-独立 XSSI setup 只在初次安装创建当前库。`product_metadata` 必须精确绑定 application `xsos`、格式版本 `1.0.0`、
+独立 XSSI setup 只在初次安装创建当前库。`product_metadata` 必须精确绑定 application `xsos`、格式版本 `v1`、
 schema revision `1` 与 SHA-256
 `cb768892031e80900b95395aae25397fac4c37f3aac8b912d911d65c6a277afe`；软件补丁版本由发行身份中的 `version` 独立表达，现场 `sqlite_schema` 重新计算也
 必须一致。当前 DDL 中管理员列是 `_common_administrators.username`，没有 `email` 或 role 列；DDL 自身约束 canonical

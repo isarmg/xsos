@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use chrono::{Duration, Utc};
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -5,7 +7,7 @@ use uuid::Uuid;
 use xsos::{pagination::Cursor, store};
 
 async fn fixture() -> (tempfile::TempDir, SqlitePool) {
-    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(3)
         .connect_with(
@@ -15,7 +17,7 @@ async fn fixture() -> (tempfile::TempDir, SqlitePool) {
         )
         .await
         .unwrap();
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     (directory, pool)
 }
 async fn host(pool: &SqlitePool, name: &str) -> Uuid {
@@ -157,7 +159,7 @@ async fn tied_report_receipts_cross_all_pages_without_duplicates_or_lost_history
     for _ in 0..123 {
         let report = Uuid::new_v4();
         expected.insert(report);
-        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,3,?,?,10)").bind(report).bind(id).bind(now).bind(now).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,1,?,?,10)").bind(report).bind(id).bind(now).bind(now).execute(&pool).await.unwrap();
     }
     for (instant, included) in [
         (from - Duration::microseconds(1), false),
@@ -169,7 +171,7 @@ async fn tied_report_receipts_cross_all_pages_without_duplicates_or_lost_history
         if included {
             expected.insert(report);
         }
-        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,3,?,?,10)")
+        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,1,?,?,10)")
             .bind(report).bind(id).bind(instant).bind(instant).execute(&pool).await.unwrap();
     }
     let mut actual = HashSet::new();

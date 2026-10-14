@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use std::{fs, path::Path};
 
 use chrono::Utc;
@@ -111,7 +113,7 @@ fn mutate_checkpoint_and_seed_sidecar_sentinels(path: &Path, sql: &str) {
 async fn copy_current_database_image(target: &Path) {
     let source_directory = tempfile::tempdir().unwrap();
     let source = source_directory.path().join("current.sqlite3");
-    let pool = store::open_or_initialize(&database_url(&source))
+    let pool = fixture_database::open_or_initialize(&database_url(&source))
         .await
         .unwrap();
     pool.close().await;
@@ -124,7 +126,7 @@ async fn exact_current_schema_survives_close_and_reopen() {
     let path = directory.path().join("current.sqlite3");
     let url = database_url(&path);
 
-    let pool = store::open_or_initialize(&url)
+    let pool = fixture_database::open_or_initialize(&url)
         .await
         .expect("initialize the one current schema");
     assert!(store::ready(&pool).await);
@@ -234,7 +236,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     }
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&unknown_schema))
+        fixture_database::open_or_initialize(&database_url(&unknown_schema))
             .await
             .is_err()
     );
@@ -248,7 +250,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     );
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&noncurrent_version))
+        fixture_database::open_or_initialize(&database_url(&noncurrent_version))
             .await
             .is_err()
     );
@@ -262,7 +264,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     );
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&missing_platform_metadata))
+        fixture_database::open_or_initialize(&database_url(&missing_platform_metadata))
             .await
             .is_err()
     );
@@ -273,7 +275,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     mutate_checkpoint_and_seed_sidecar_sentinels(&drifted, "CREATE TABLE unexpected(id INTEGER)");
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&drifted))
+        fixture_database::open_or_initialize(&database_url(&drifted))
             .await
             .is_err()
     );
@@ -284,7 +286,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
 async fn readiness_rejects_live_schema_drift() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("ready.sqlite3");
-    let pool = store::open_or_initialize(&database_url(&path))
+    let pool = fixture_database::open_or_initialize(&database_url(&path))
         .await
         .unwrap();
     assert!(store::ready(&pool).await);

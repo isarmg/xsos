@@ -1193,9 +1193,14 @@ mod tests {
             .await
             .unwrap();
         store::initialize_empty(&pool).await.unwrap();
-        store::ensure_admin_user(&pool, username, Some(password))
-            .await
-            .unwrap();
+        crate::test_support::seed_administrator(
+            &AdministratorService::new(SqliteAdministratorStore::new(pool.clone())),
+            username,
+            password,
+            1,
+        )
+        .await
+        .unwrap();
         router(
             AppState::new(
                 pool,

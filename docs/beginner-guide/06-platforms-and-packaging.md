@@ -1,15 +1,5 @@
-# Installation and operation
+# 平台与打包
 
-Use the signed release package with the shared [XSSI](https://github.com/isarmg/xssi) installer. Verify the package against an independently supplied release public key and fingerprint before executing its scripts or helper. The installer prepares the service account, directories, configuration, initial administrator and systemd unit. Host operations belong to the scripts.
+Server 固定 Linux x86_64 GNU；Client 平台由各自仓库维护，不以 Server 编译结果证明客户端系统已运行。运行主体嵌入必要管理 Web，主机安装与系统服务配置由独立 XSSI 实施。
 
-The default installation root is `/opt/isarmg/xsos`. Runtime invocation is `xsos --root ROOT`. The server reads `ROOT/config/config.json`, opens existing initialized state and starts HTTP. Startup never creates administrator accounts or installation secrets.
-
-An upgrade first downloads and verifies the complete package while the existing service is running. Its script then stops all writers and delegates the locked backup, explicit source/target schema migration and atomic package switch to XSSC. The script starts the resulting service and checks readiness; failure restores the backed-up generation before returning to the previous service. Media/file paths are preserved instead of silently moved.
-
-Offline configuration checks and administrator password resets use the signed `libexec/setup` helper through XSSI maintenance scripts. Runtime HTTP administrator and health endpoints remain available. Passwords use the existing administrator hash policy; resetting an administrator password preserves instance authorization keys.
-
-Uninstallation and removal of data are performed by the operator.
-
-## Development checks
-
-Build embedded assets with the pinned XCSS Web builder, then run `cargo fmt --all -- --check`, product unit tests and Clippy. Use isolated private fixtures for offline initialization, validation and migration checks. Product packages obtain installer implementation from the exact `installer-source.json` revision and require the controlled `XSSI_SIGNING_KEY` file.
+正式构建固定源码、工具链和权威锁文件，通过当前不可变标签取得可追溯载荷，生成完整 SBOM 和 SHA-256 清单，实际归档验证后才能发行。完整步骤及未验证范围见[开发指南](../development.md)，部署前提见[运维](../operations.md)。

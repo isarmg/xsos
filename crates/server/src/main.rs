@@ -40,14 +40,11 @@ async fn serve_with_config(config: xsos::config::ValidatedConfig) -> anyhow::Res
     let signals = xcss::server_runtime::ProcessSignals::install()?;
     let listeners = xcss::server_runtime::BoundListeners::bind([config.bind])?;
     let transport = xcss::server_runtime::HttpServer::new(listeners, signals);
-    xcss::server_cli::runtime_allowed(&config.data_dir).map_err(xcss::server_cli::CliError)?;
-    xsos::offline::validate_runtime_inputs(&config)?;
+    xsos::runtime_validation::validate_runtime_inputs(&config)?;
     let directory = xcss::state_file::PrivateStateDirectory::open(&config.data_dir)?;
-    xcss::server_cli::runtime_allowed(directory.path()).map_err(xcss::server_cli::CliError)?;
     let _common_lock = directory.try_instance_lock()?;
-    xcss::server_cli::runtime_allowed(directory.path()).map_err(xcss::server_cli::CliError)?;
     let application_lock = ApplicationLock::acquire(&config.database_url)?;
-    let key = xsos::offline::validate_state(&config).await?;
+    let key = xsos::runtime_validation::validate_state(&config).await?;
     enable_runtime_logging(&config.root)?;
     tracing::info!(event = "common.config.loaded");
     let pool =
@@ -127,13 +124,9 @@ async fn serve_with_config(config: xsos::config::ValidatedConfig) -> anyhow::Res
     Ok(())
 }
 
-static LOG_LAYER: std::sync::OnceLock<xcss::log::XcssStructuredLayer> = std::sync::OnceLock::new();
 fn initialize_logging(log_level: &str) -> anyhow::Result<()> {
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
     let layer = xcss::log::XcssStructuredLayer::new("xsos")?;
-    LOG_LAYER
-        .set(layer.clone())
-        .map_err(|_| anyhow::anyhow!("logging already initialized"))?;
     tracing_subscriber::registry()
         .with(log_level.parse::<tracing_subscriber::filter::LevelFilter>()?)
         .with(layer)
@@ -147,9 +140,6 @@ fn enable_runtime_logging(root: &std::path::Path) -> anyhow::Result<()> {
         "xsos",
         xcss::log::LogRetention::default(),
     )?;
-    LOG_LAYER
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("logging is unavailable"))?
-        .set_rotating_file(file)?;
+    xcss::log::install_rotating_file(file)?;
     Ok(())
 }

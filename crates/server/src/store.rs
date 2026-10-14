@@ -7,7 +7,9 @@ use xsos_protocol::{
     Capability, ClientPairingMode, ClientPairingRequest, ClientReport, PairingStatus,
 };
 
-pub use crate::database_schema::{initialize_empty, open_existing, open_or_initialize};
+pub use crate::database_schema::open_existing;
+#[cfg(test)]
+pub use crate::database_schema::{initialize_empty, open_or_initialize};
 use crate::model::{
     ClientInstanceSummary, ClientPairingPublicSummary, HistoryBucket, HistoryPoint,
     HistorySeriesResponse, HostCount, HostStatistics, HostSummary, MetricAggregate, MetricSummary,
@@ -54,57 +56,15 @@ pub fn normalize_username(username: &str) -> anyhow::Result<String> {
     xcss::admin_auth::normalize_administrator_username(username).map_err(anyhow::Error::from)
 }
 
-pub async fn ensure_admin_user(
-    pool: &SqlitePool,
-    username: &str,
-    password: Option<&str>,
-) -> anyhow::Result<()> {
-    let store = xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone());
-    let service = xcss::admin_core::AdministratorService::new(store);
-    if service.store().administrator_count().await? == 0 {
-        let password = password.ok_or_else(|| {
-            anyhow::anyhow!(
-                "administrator password from stdin is required for explicit initialization"
-            )
-        })?;
-        service
-            .bootstrap_administrator(username, password, now_micros()?)
-            .await?;
-    }
-    service.store().validate_all_administrators().await?;
-    Ok(())
-}
-
-pub async fn reset_admin_password(
-    pool: &SqlitePool,
-    username: &str,
-    password: &str,
-) -> anyhow::Result<()> {
-    let store = xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone());
-    store.validate_all_administrators().await?;
-    xcss::admin_core::AdministratorService::new(store)
-        .change_administrator_password(username, password, now_micros()?)
-        .await
-        .map_err(anyhow::Error::from)
-}
-
 /// Startup validates the current administrator state and never bootstraps it.
 pub async fn require_administrator(pool: &SqlitePool) -> anyhow::Result<()> {
     let store = xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone());
     anyhow::ensure!(
         store.administrator_count().await? > 0,
-        "service is not initialized; complete installation with xssi"
+        "service is not initialized; required installation state is missing"
     );
     store.validate_all_administrators().await?;
     Ok(())
-}
-
-fn now_micros() -> anyhow::Result<u64> {
-    Ok(u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_micros(),
-    )?)
 }
 
 async fn audit(

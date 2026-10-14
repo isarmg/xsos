@@ -1,3 +1,6 @@
+use fixture_database::administrator as fixture_administrator;
+#[path = "support/database.rs"]
+mod fixture_database;
 use axum::{
     Router,
     body::Body,
@@ -11,7 +14,6 @@ use xcss::admin_auth::{AdministratorOriginMode, CSRF_HEADER};
 use xcss::contracts::AdministratorSession;
 use xsos::{
     http::{AppState, router},
-    store,
     telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
 };
 
@@ -27,12 +29,19 @@ async fn fixture() -> Fixture {
         .connect("sqlite::memory:")
         .await
         .expect("open test database");
-    store::initialize_empty(&pool)
+    fixture_database::initialize_empty(&pool)
         .await
         .expect("initialize schema");
-    store::ensure_admin_user(&pool, "admin", Some("correct-password"))
-        .await
-        .expect("seed administrator");
+    fixture_administrator::seed_administrator(
+        &xcss::admin_core::AdministratorService::new(
+            xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone()),
+        ),
+        "admin",
+        "correct-password",
+        1,
+    )
+    .await
+    .expect("seed administrator");
     let (state, telemetry) = AppState::with_telemetry_config(
         pool.clone(),
         AdministratorOriginMode::LoopbackDevelopmentHttp,

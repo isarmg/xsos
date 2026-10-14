@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -36,7 +38,9 @@ impl TestDatabase {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("telemetry.sqlite3");
         let database_url = format!("sqlite://{}", path.display());
-        let pool = store::open_or_initialize(&database_url).await.unwrap();
+        let pool = fixture_database::open_or_initialize(&database_url)
+            .await
+            .unwrap();
         Self {
             _directory: directory,
             database_url,
@@ -589,7 +593,9 @@ async fn writer_failure_is_503_and_restart_preserves_report_idempotency() {
         "sqlite://{}",
         failed_directory.path().join("closed.sqlite3").display()
     );
-    let failed_pool = store::open_or_initialize(&failed_url).await.unwrap();
+    let failed_pool = fixture_database::open_or_initialize(&failed_url)
+        .await
+        .unwrap();
     failed_pool.close().await;
     let (failed_writer, failed_task) =
         TelemetryWriter::start(failed_pool, config(4, 2, 5, 10, 500, 1_000));

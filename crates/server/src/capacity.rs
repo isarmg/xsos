@@ -165,7 +165,7 @@ mod tests {
         for id in [a, b] {
             sqlx::query("INSERT INTO monitored_hosts(host_id,name,os,arch,client_version,registered_at,last_seen_at) VALUES(?,'test','linux','x','1',?,?)").bind(id).bind(chrono::Utc::now()).bind(chrono::Utc::now()).execute(&pool).await.unwrap();
         }
-        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,3,?,?,10)").bind(existing).bind(a).bind(chrono::Utc::now()).bind(chrono::Utc::now()).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) VALUES(?,?,1,?,?,10)").bind(existing).bind(a).bind(chrono::Utc::now()).bind(chrono::Utc::now()).execute(&pool).await.unwrap();
         let limits = Limits {
             host_reports: 1,
             total_reports: 2,

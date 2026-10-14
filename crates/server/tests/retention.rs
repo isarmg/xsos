@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -28,7 +30,9 @@ impl TestDatabase {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("retention.sqlite3");
         let database_url = format!("sqlite://{}", path.display());
-        let pool = store::open_or_initialize(&database_url).await.unwrap();
+        let pool = fixture_database::open_or_initialize(&database_url)
+            .await
+            .unwrap();
         Self {
             _directory: directory,
             database_url,
@@ -781,7 +785,7 @@ async fn startup_period_failure_and_shutdown_are_supervised() {
     assert!(!maintenance.is_running());
 
     let closed_directory = tempfile::tempdir().unwrap();
-    let closed_pool = store::open_or_initialize(&format!(
+    let closed_pool = fixture_database::open_or_initialize(&format!(
         "sqlite://{}",
         closed_directory.path().join("closed.sqlite3").display()
     ))

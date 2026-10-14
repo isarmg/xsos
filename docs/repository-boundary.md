@@ -9,5 +9,5 @@
 影响凭据和重试行为。双方通过同一产品协议依赖连接，分别构建和验证各自实现。
 
 当前数据库身份由 `crates/server/src/database_schema.rs` 定义：Schema revision 为 `1`，
-`schema_application_version` 为 `1.0.0`。启动只接受匹配的身份与 DDL 指纹；格式转换须有独立验证流程。
+`schema_application_version` 为 `v1`。启动只接受匹配的身份与 DDL 指纹；非当前数据会被拒绝，不提供格式转换或迁移。
 每个发行标签固定对应源码与制品，开发分支的行为由当前提交标识。

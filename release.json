@@ -1,8 +1,8 @@
 {
   "manifest_format": "xsos-release-v1",
   "application": "xsos",
-  "version": "1.0.3",
-  "schema_application_version": "1.0.0",
+  "version": "1.0.0",
+  "schema_application_version": "v1",
   "api_prefix": "/api/v1",
   "schema_revision": 1,
   "schema_sha256": "cb768892031e80900b95395aae25397fac4c37f3aac8b912d911d65c6a277afe",

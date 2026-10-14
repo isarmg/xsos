@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -11,18 +11,21 @@ use xcss::schema_identity::SchemaIdentity;
 use xcss::schema_identity::SchemaRow;
 use xcss::sqlite::{PRODUCT_METADATA_DDL, PoolOptions};
 
+#[cfg(test)]
+use std::fs::{File, OpenOptions};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
+#[cfg(all(test, unix))]
+use std::os::unix::fs::OpenOptionsExt;
 
-pub const APPLICATION: &str = "xsos";
+pub use crate::database_definition::SCHEMA_APPLICATION_VERSION;
+pub use crate::database_definition::{APPLICATION, SCHEMA_REVISION, SCHEMA_SHA256};
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
-// Persisted schema identity changes only with a data-format migration.
-pub const SCHEMA_APPLICATION_VERSION: &str = "1.0.0";
-pub const SCHEMA_REVISION: i64 = 1;
-pub const SCHEMA_SHA256: &str = "cb768892031e80900b95395aae25397fac4c37f3aac8b912d911d65c6a277afe";
 
+#[cfg(test)]
 const CURRENT_SCHEMA_SQL: &str = include_str!("../../../schema/generated/current_schema.sql");
 
+#[cfg(test)]
 pub async fn open_or_initialize(database_url: &str) -> anyhow::Result<SqlitePool> {
     let path = database_path(database_url)?;
     let mut options = OpenOptions::new();
@@ -56,10 +59,14 @@ pub async fn open_existing(database_url: &str) -> anyhow::Result<SqlitePool> {
 pub async fn open_validated_location(database_url: &str) -> anyhow::Result<SqlitePool> {
     let path = database_path(database_url)?;
     let pool = open_pool(&path).await?;
-    validate_pool(&pool).await?;
+    if let Err(error) = validate_pool(&pool).await {
+        pool.close().await;
+        return Err(error);
+    }
     Ok(pool)
 }
 
+#[cfg(test)]
 async fn initialize_created(path: &Path, file: File) -> anyhow::Result<SqlitePool> {
     if let Err(error) = file
         .sync_all()
@@ -88,6 +95,7 @@ async fn initialize_created(path: &Path, file: File) -> anyhow::Result<SqlitePoo
     Ok(pool)
 }
 
+#[cfg(test)]
 fn fail_initialization<T>(path: &Path, error: anyhow::Error) -> anyhow::Result<T> {
     if let Err(cleanup_error) = cleanup_failed_initialization(path) {
         return Err(cleanup_error.context(format!(
@@ -97,6 +105,7 @@ fn fail_initialization<T>(path: &Path, error: anyhow::Error) -> anyhow::Result<T
     Err(error.context("initialize current xsos schema"))
 }
 
+#[cfg(test)]
 async fn checkpoint_and_sync(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
     xcss::sqlite::checkpoint(pool)
         .await
@@ -117,6 +126,7 @@ async fn open_pool(database_path: &Path) -> anyhow::Result<SqlitePool> {
 /// Initializes one completely empty SQLite database with the single current
 /// schema. Any existing product object causes the transaction to fail before
 /// DDL is executed.
+#[cfg(test)]
 pub async fn initialize_empty(pool: &SqlitePool) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
     let existing: i64 =
@@ -314,7 +324,6 @@ pub fn expected_identity() -> anyhow::Result<SchemaIdentity> {
 pub fn database_path(database_url: &str) -> anyhow::Result<PathBuf> {
     let value = database_url
         .strip_prefix("sqlite://")
-        .or_else(|| database_url.strip_prefix("sqlite:"))
         .context("database URL must use the sqlite scheme")?;
     ensure!(!value.is_empty(), "SQLite database path must not be empty");
     ensure!(
@@ -328,6 +337,7 @@ pub fn database_path(database_url: &str) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(value))
 }
 
+#[cfg(test)]
 fn cleanup_failed_initialization(path: &Path) -> anyhow::Result<()> {
     for suffix in ["-wal", "-shm", "-journal", ""] {
         let mut value = path.as_os_str().to_os_string();
@@ -341,11 +351,13 @@ fn cleanup_failed_initialization(path: &Path) -> anyhow::Result<()> {
     sync_parent(path)
 }
 
+#[cfg(test)]
 fn sync_file_and_parent(path: &Path) -> anyhow::Result<()> {
     File::open(path)?.sync_all()?;
     sync_parent(path)
 }
 
+#[cfg(test)]
 fn sync_parent(path: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;

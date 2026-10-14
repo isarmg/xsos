@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use axum::{
     Router,
     body::Body,
@@ -11,7 +13,6 @@ use uuid::Uuid;
 use xcss::error::ErrorEnvelope;
 use xsos::{
     http::{AppState, router},
-    store,
     telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
     token_hash,
 };
@@ -31,7 +32,7 @@ async fn fixture() -> Fixture {
         .connect("sqlite::memory:")
         .await
         .expect("open test database");
-    store::initialize_empty(&pool)
+    fixture_database::initialize_empty(&pool)
         .await
         .expect("initialize current test schema");
     let (state, telemetry_writer) = AppState::with_telemetry_config(

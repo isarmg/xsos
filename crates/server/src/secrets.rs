@@ -2,26 +2,13 @@
 
 use std::path::Path;
 
+#[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InstanceSecrets {
-    client_authorization_key: String,
-}
-
-impl InstanceSecrets {
-    fn key(&self) -> anyhow::Result<[u8; 32]> {
-        STANDARD
-            .decode(&self.client_authorization_key)
-            .ok()
-            .and_then(|key| key.try_into().ok())
-            .ok_or_else(|| anyhow::anyhow!("persisted client authorization key is invalid"))
-    }
-}
+use crate::secret_definition::InstanceSecrets;
 
 /// Create the private key store for an explicitly initialized empty instance.
+#[cfg(test)]
 pub fn initialize(data_dir: &Path) -> anyhow::Result<()> {
     let secrets = InstanceSecrets {
         client_authorization_key: STANDARD.encode(xcss::server_secrets::generate_key()?),

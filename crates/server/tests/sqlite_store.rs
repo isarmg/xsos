@@ -1,3 +1,5 @@
+#[path = "support/database.rs"]
+mod fixture_database;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
@@ -41,7 +43,7 @@ fn host(id: Uuid, os: &str) -> HostIdentity {
 async fn activation_admission_uses_only_the_matching_persisted_instance() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     let (first, code) = store::create_invite(&pool, &secrets, "first", "admin")
         .await
@@ -112,7 +114,7 @@ async fn activation_admission_uses_only_the_matching_persisted_instance() {
 async fn instance_list_returns_every_instance_in_case_insensitive_name_order() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     for name in ["zulu", "Bravo", "alpha"] {
         let (result, _) = store::create_invite(&pool, &secrets, name, "admin")
@@ -137,7 +139,7 @@ async fn instance_list_returns_every_instance_in_case_insensitive_name_order() {
 async fn report_logs_include_every_receipt_in_the_selected_half_open_day() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let host_id = Uuid::new_v4();
     let other_host = Uuid::new_v4();
     let from = DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z")
@@ -160,7 +162,7 @@ async fn report_logs_include_every_receipt_in_the_selected_half_open_day() {
     for index in 0..1001 {
         sqlx::query(
             "INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) \
-             VALUES(?,?,3,?,?,10)",
+             VALUES(?,?,1,?,?,10)",
         )
         .bind(Uuid::new_v4())
         .bind(host_id)
@@ -177,7 +179,7 @@ async fn report_logs_include_every_receipt_in_the_selected_half_open_day() {
     ] {
         sqlx::query(
             "INSERT INTO client_metric_reports(report_id,host_id,schema_version,collected_at,received_at,interval_seconds) \
-             VALUES(?,?,3,?,?,10)",
+             VALUES(?,?,1,?,?,10)",
         )
         .bind(Uuid::new_v4())
         .bind(host)
@@ -292,7 +294,7 @@ fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> ClientReport {
 async fn future_clock_correction_replaces_latest_without_promoting_delayed_backlog() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let host_id = Uuid::new_v4();
     let credential = token_hash("future-clock-correction-token");
     let now = Utc::now();
@@ -372,7 +374,7 @@ fn gpu_temperature_uses_the_common_physical_bounds() {
 async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retries() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool)
+    fixture_database::initialize_empty(&pool)
         .await
         .expect("initialize current schema");
     let host_id = Uuid::new_v4();
@@ -423,7 +425,7 @@ async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retr
 async fn issued_token_cannot_create_a_pairing_after_its_pairing_row_is_gone() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let old_host = Uuid::new_v4();
     let credential_id = Uuid::new_v4();
     let issued_hash = token_hash("issued-token-with-pruned-pairing-row");
@@ -484,7 +486,7 @@ async fn issued_token_cannot_create_a_pairing_after_its_pairing_row_is_gone() {
 async fn expired_pairing_is_persisted_and_retained_for_twenty_four_hours() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let polling_secret_hash = token_hash("retained-expired-polling-secret");
     let request = ClientPairingRequest {
         protocol_version: xsos_protocol::HOST_PAIRING_PROTOCOL_VERSION,
@@ -550,7 +552,7 @@ async fn expired_pairing_is_persisted_and_retained_for_twenty_four_hours() {
 async fn cancelled_code_cannot_authorize_a_new_pairing() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     let (result, code) = store::create_invite(&pool, &secrets, "Cancel me", "admin")
         .await
@@ -601,7 +603,7 @@ async fn cancelled_code_cannot_authorize_a_new_pairing() {
 async fn direct_delete_removes_a_pending_instance_in_one_operation() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     let (result, _) = store::create_invite(&pool, &secrets, "Delete me", "admin")
         .await
@@ -634,7 +636,7 @@ async fn direct_delete_removes_a_pending_instance_in_one_operation() {
 async fn rotating_instance_authorization_revokes_old_credential_and_requires_new_code() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     let (created, old_code) = store::create_invite(&pool, &secrets, "Rotate me", "admin")
         .await
@@ -876,7 +878,7 @@ async fn rotating_instance_authorization_revokes_old_credential_and_requires_new
 async fn recovery_preserves_an_absent_host_identity_and_never_overwrites_an_existing_host() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool).await.unwrap();
+    fixture_database::initialize_empty(&pool).await.unwrap();
     let secrets = xsos::crypto::SecretBox::new([0x42; 32]);
     let old_host_id = Uuid::new_v4();
 
@@ -977,7 +979,7 @@ async fn recovery_preserves_an_absent_host_identity_and_never_overwrites_an_exis
 async fn current_sqlite_supports_pair_activate_report_rename_and_delete() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::initialize_empty(&pool)
+    fixture_database::initialize_empty(&pool)
         .await
         .expect("initialize current schema");
 
@@ -1297,7 +1299,7 @@ fn hardware_validation_rejects_old_protocol_and_invalid_readings() {
 #[tokio::test]
 async fn host_detail_keeps_summary_and_payload_in_one_ingestion_snapshot() {
     let directory = tempfile::tempdir().unwrap();
-    let pool = store::open_or_initialize(&format!(
+    let pool = fixture_database::open_or_initialize(&format!(
         "sqlite://{}",
         directory.path().join("detail-snapshot.db").display()
     ))

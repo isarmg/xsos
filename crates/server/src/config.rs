@@ -7,23 +7,18 @@ use std::{
 };
 
 use clap::Parser;
-use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use xcss::config::Override;
 use xcss::config::{ConfigSource, EnvMapping, EnvValueKind};
 
-use crate::retention::{
-    DEFAULT_AGGREGATE_RETENTION_DAYS, DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
-    DEFAULT_RAW_RETENTION_DAYS, DEFAULT_RETENTION_BATCH_SIZE, DEFAULT_RETENTION_RUN_MILLISECONDS,
-    DEFAULT_RETENTION_TRANSACTIONS, DEFAULT_RETENTION_YIELD_MILLISECONDS, RetentionConfig,
-};
+use crate::retention::RetentionConfig;
 use crate::telemetry::TelemetryWriterConfig;
 use xcss::admin_auth::AdministratorOriginMode;
 
 #[derive(Debug, Parser)]
 #[command(name = "xsos", version, about = "Host telemetry service")]
 pub struct Cli {
-    #[arg(long, default_value = "/opt/isarmg/xsos")]
+    #[arg(long)]
     pub root: PathBuf,
 }
 
@@ -58,18 +53,27 @@ impl ValidatedConfig {
         };
 
         let config = normalize_config_path(config)?;
-        let file = xcss::config::read_private_file(&config)?;
+        let file = xcss::config::read_managed_file(
+            &config,
+            cfg!(debug_assertions) && crate::release_contract::SOURCE_REVISION == "unbound",
+        )?;
         let environment = xcss::config::read_environment(ENVIRONMENT, |name| env::var(name).ok())?;
         let loaded = xcss::config::resolve_validated(
             &defaults,
             Some(&file),
             &environment,
             &[],
-            validate_intrinsic,
+            |settings, source| {
+                crate::config_definition::validate(
+                    settings,
+                    root,
+                    crate::release_contract::SOURCE_REVISION != "unbound",
+                    source,
+                )
+            },
         )?;
         let settings = loaded.value;
         let data_dir = settings.data_dir;
-        validate_state_location(root, &data_dir)?;
         let database_url = format!("sqlite://{}", data_dir.join("xsos.sqlite3").display());
         crate::database_schema::database_path(&database_url)?;
         let bind = settings.bind;
@@ -116,53 +120,9 @@ impl ValidatedConfig {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Settings {
-    data_dir: PathBuf,
-    bind: SocketAddr,
-    development: bool,
-    log_level: String,
-    development_web_dir: Option<String>,
-    telemetry_queue_capacity: usize,
-    telemetry_batch_size: usize,
-    telemetry_flush_milliseconds: u64,
-    telemetry_enqueue_wait_milliseconds: u64,
-    telemetry_request_timeout_milliseconds: u64,
-    telemetry_shutdown_drain_milliseconds: u64,
-    raw_retention_days: u64,
-    aggregate_retention_days: u64,
-    retention_interval_seconds: u64,
-    retention_batch_size: usize,
-    retention_max_transactions_per_run: usize,
-    retention_max_run_milliseconds: u64,
-    retention_yield_milliseconds: u64,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            data_dir: PathBuf::from("/opt/isarmg/xsos/state"),
-            bind: "127.0.0.1:18105".parse().expect("valid default bind"),
-            development: false,
-            log_level: "info".into(),
-            development_web_dir: None,
-            telemetry_queue_capacity: 256,
-            telemetry_batch_size: 64,
-            telemetry_flush_milliseconds: 25,
-            telemetry_enqueue_wait_milliseconds: 10,
-            telemetry_request_timeout_milliseconds: 10_000,
-            telemetry_shutdown_drain_milliseconds: 15_000,
-            raw_retention_days: DEFAULT_RAW_RETENTION_DAYS,
-            aggregate_retention_days: DEFAULT_AGGREGATE_RETENTION_DAYS,
-            retention_interval_seconds: DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
-            retention_batch_size: DEFAULT_RETENTION_BATCH_SIZE,
-            retention_max_transactions_per_run: DEFAULT_RETENTION_TRANSACTIONS,
-            retention_max_run_milliseconds: DEFAULT_RETENTION_RUN_MILLISECONDS,
-            retention_yield_milliseconds: DEFAULT_RETENTION_YIELD_MILLISECONDS,
-        }
-    }
-}
+use crate::config_definition::Settings;
+#[cfg(test)]
+use crate::config_definition::validate_intrinsic;
 
 const ENVIRONMENT: &[EnvMapping<'static>] = &[
     EnvMapping {
@@ -399,109 +359,6 @@ mod tests {
     }
 }
 
-fn validate_intrinsic(
-    settings: &Settings,
-    source: ConfigSource,
-) -> Result<(), xcss::config::ConfigError> {
-    let invalid =
-        |path| xcss::config::ConfigError::new(xcss::config::Reason::InvalidValue, path, source);
-
-    if !settings.data_dir.is_absolute()
-        || settings
-            .data_dir
-            .components()
-            .any(|component| component == std::path::Component::ParentDir)
-    {
-        return Err(invalid("/data_dir"));
-    }
-    if !matches!(
-        settings.log_level.as_str(),
-        "trace" | "debug" | "info" | "warn" | "error" | "off"
-    ) {
-        return Err(invalid("/log_level"));
-    }
-    for (path, value, min, max) in [
-        (
-            "/telemetry_queue_capacity",
-            settings.telemetry_queue_capacity as u64,
-            1,
-            crate::telemetry::MAX_QUEUE_CAPACITY as u64,
-        ),
-        (
-            "/telemetry_batch_size",
-            settings.telemetry_batch_size as u64,
-            1,
-            crate::telemetry::MAX_BATCH_SIZE as u64,
-        ),
-        (
-            "/retention_batch_size",
-            settings.retention_batch_size as u64,
-            1,
-            crate::retention::MAX_RETENTION_BATCH_SIZE as u64,
-        ),
-        (
-            "/retention_max_transactions_per_run",
-            settings.retention_max_transactions_per_run as u64,
-            3,
-            crate::retention::MAX_RETENTION_TRANSACTIONS as u64,
-        ),
-        (
-            "/telemetry_flush_milliseconds",
-            settings.telemetry_flush_milliseconds,
-            1,
-            1000,
-        ),
-        (
-            "/telemetry_enqueue_wait_milliseconds",
-            settings.telemetry_enqueue_wait_milliseconds,
-            1,
-            250,
-        ),
-        (
-            "/telemetry_request_timeout_milliseconds",
-            settings.telemetry_request_timeout_milliseconds,
-            100,
-            30000,
-        ),
-        (
-            "/telemetry_shutdown_drain_milliseconds",
-            settings.telemetry_shutdown_drain_milliseconds,
-            100,
-            60000,
-        ),
-        ("/raw_retention_days", settings.raw_retention_days, 1, 365),
-        (
-            "/aggregate_retention_days",
-            settings.aggregate_retention_days,
-            1,
-            3650,
-        ),
-        (
-            "/retention_interval_seconds",
-            settings.retention_interval_seconds,
-            1,
-            86400,
-        ),
-        (
-            "/retention_max_run_milliseconds",
-            settings.retention_max_run_milliseconds,
-            100,
-            10000,
-        ),
-        (
-            "/retention_yield_milliseconds",
-            settings.retention_yield_milliseconds,
-            1,
-            100,
-        ),
-    ] {
-        if !(min..=max).contains(&value) {
-            return Err(invalid(path));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod precedence_contract_tests {
     use super::*;
@@ -657,36 +514,4 @@ mod required_configuration_tests {
         std::os::unix::fs::symlink(directory.path().join("missing.json"), &path).unwrap();
         assert!(ValidatedConfig::from_root_sources(directory.path(), &path).is_err());
     }
-}
-
-fn validate_state_location(root: &Path, state: &Path) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        state.is_absolute()
-            && state != Path::new("/")
-            && state.components().all(|part| matches!(
-                part,
-                std::path::Component::RootDir | std::path::Component::Normal(_)
-            )),
-        "state paths must be normalized absolute directories"
-    );
-    anyhow::ensure!(
-        !root.starts_with(state),
-        "state directory cannot contain the installation root"
-    );
-    for name in [
-        "config",
-        "logs",
-        "run",
-        "bin",
-        "libexec",
-        "share",
-        "maintenance",
-    ] {
-        let protected = root.join(name);
-        anyhow::ensure!(
-            !state.starts_with(&protected) && !protected.starts_with(state),
-            "state directory overlaps a protected installation path"
-        );
-    }
-    Ok(())
 }

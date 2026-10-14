@@ -16,13 +16,13 @@ use tokio::{
 
 use crate::store::{self, ReportStoreError, ReportWrite};
 
-pub const MAX_QUEUE_CAPACITY: usize = 1_024;
+pub use crate::config_definition::MAX_TELEMETRY_QUEUE_CAPACITY as MAX_QUEUE_CAPACITY;
 pub const MAX_PENDING_PER_HOST: usize = 16;
-pub const MAX_BATCH_SIZE: usize = 512;
-pub const MAX_FLUSH_LATENCY: Duration = Duration::from_secs(1);
-pub const MAX_ENQUEUE_WAIT: Duration = Duration::from_millis(250);
-pub const MAX_REQUEST_TIME: Duration = Duration::from_secs(30);
-pub const MAX_SHUTDOWN_DRAIN: Duration = Duration::from_secs(60);
+pub use crate::config_definition::MAX_TELEMETRY_BATCH_SIZE as MAX_BATCH_SIZE;
+pub use crate::config_definition::{
+    MAX_ENQUEUE_WAIT, MAX_FLUSH_LATENCY, MAX_REQUEST_TIME, MAX_SHUTDOWN_DRAIN, MIN_REQUEST_TIME,
+    MIN_SHUTDOWN_DRAIN,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetryWriterConfig {
@@ -60,13 +60,13 @@ impl TelemetryWriterConfig {
             "telemetry enqueue wait must be between 1ms and 250ms"
         );
         anyhow::ensure!(
-            request_time >= Duration::from_millis(100)
+            request_time >= MIN_REQUEST_TIME
                 && request_time <= MAX_REQUEST_TIME
                 && request_time > enqueue_wait + flush_latency,
             "telemetry request time must be 100ms-30s and exceed enqueue wait plus flush latency"
         );
         anyhow::ensure!(
-            shutdown_drain >= Duration::from_millis(100) && shutdown_drain <= MAX_SHUTDOWN_DRAIN,
+            shutdown_drain >= MIN_SHUTDOWN_DRAIN && shutdown_drain <= MAX_SHUTDOWN_DRAIN,
             "telemetry shutdown drain must be between 100ms and 60s"
         );
         Ok(Self {

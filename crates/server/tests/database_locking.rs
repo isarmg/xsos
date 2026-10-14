@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
+#[path = "support/database.rs"]
+mod fixture_database;
 
+use fixture_database::administrator as fixture_administrator;
 use std::{
     ffi::OsString,
     os::unix::fs::PermissionsExt,
@@ -9,10 +12,7 @@ use std::{
 
 use chrono::Utc;
 use uuid::Uuid;
-use xsos::{
-    database_lock::{ApplicationLock, MaintenanceLock},
-    store,
-};
+use xsos::database_lock::ApplicationLock;
 
 const BOOTSTRAP_PASSWORD: &str = "lock-test-bootstrap-password";
 
@@ -74,23 +74,24 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
 
     // Current CLI configuration has an absolute database authority, independent
     // of the child process working directory. Both lock protocols cover it.
-    xsos::secrets::initialize(&directory).unwrap();
+    xcss::server_secrets::initialize(&directory,&serde_json::json!({"client_authorization_key":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,[9u8;32])})).unwrap();
     let state_directory = xcss::state_file::PrivateStateDirectory::open(&directory).unwrap();
     let common = state_directory.try_instance_lock().unwrap();
     let application = ApplicationLock::acquire(&url).expect("acquire application lock");
     assert!(ApplicationLock::acquire(&url).is_err());
-    let online = MaintenanceLock::shared(&url).expect("online maintenance shares the lock");
-    assert!(
-        MaintenanceLock::exclusive(&url).is_err(),
-        "offline maintenance entered while the application was live"
-    );
-
-    let pool = store::open_or_initialize(&application.database_url())
+    let pool = fixture_database::open_or_initialize(&application.database_url())
         .await
         .expect("open SQLite through the trusted directory descriptor");
-    store::ensure_admin_user(&pool, "admin", Some(BOOTSTRAP_PASSWORD))
-        .await
-        .expect("explicitly initialize the administrator fixture");
+    fixture_administrator::seed_administrator(
+        &xcss::admin_core::AdministratorService::new(
+            xcss::admin_sqlite::SqliteAdministratorStore::new(pool.clone()),
+        ),
+        "admin",
+        BOOTSTRAP_PASSWORD,
+        1,
+    )
+    .await
+    .expect("explicitly initialize the administrator fixture");
     let host_id = Uuid::new_v4();
     let now = Utc::now();
     sqlx::query(
@@ -118,16 +119,8 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         "SHM was not created beside the configured database"
     );
 
-    let validation = xsos::offline::validate_config(&root, &config)
-        .await
-        .expect("validate current configuration without a runtime maintenance command");
-    assert_eq!(validation.data_dir, directory);
-    assert!(validation.state_paths.contains(&directory));
-    assert_eq!(
-        validation.schema_identity,
-        xsos::database_schema::expected_identity().unwrap()
-    );
-
+    let config_value = xsos::config::ValidatedConfig::from_root_sources(&root, &config).unwrap();
+    assert_eq!(config_value.data_dir, directory);
     let second_server = configured_command(&root, &directory)
         .output()
         .expect("run a second server against the same absolute database");
@@ -145,17 +138,11 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
 
     close_workers(&pool).await;
     // Capture only after this process releases its original SQLite descriptors.
-    xsos::offline::check(&root, &config)
+    xsos::runtime_validation::validate_state(&config_value)
         .await
-        .expect("read a validation snapshot without changing persisted state");
-    drop(online);
+        .unwrap();
     drop(application);
     drop(common);
-
-    let offline = MaintenanceLock::exclusive(&url).expect("lock released after shutdown");
-    assert!(ApplicationLock::acquire(&url).is_err());
-    drop(offline);
-
     let restarted = ApplicationLock::acquire(&url).expect("reacquire lock after restart");
     xsos::database_schema::validate_configuration_database(&url)
         .expect("validate the physical database before SQLite opens it");
