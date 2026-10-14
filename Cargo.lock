@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "xsos-protocol"
-version = "1.0.1"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "serde",

@@ -1,7 +1,7 @@
 {
   "manifest_format": "xsos-release-v1",
   "application": "xsos",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "schema_application_version": "v1",
   "api_prefix": "/api/v1",
   "schema_revision": 1,
