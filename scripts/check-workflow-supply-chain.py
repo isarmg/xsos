@@ -20,6 +20,8 @@ EXACT_DESKTOP_MATRIX = "os: [ubuntu-24.04, windows-2025, macos-26]"
 MAX_TIMEOUT_MINUTES = 60
 MAX_WORKFLOW_BYTES = 1024 * 1024
 PINNED_OFFICIAL_ACTIONS = {
+    "actions/cache/restore": "0400d5f644dc74513175e3cd8d07132dd4860809",
+    "actions/cache/save": "0400d5f644dc74513175e3cd8d07132dd4860809",
     "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     # Exact official commits already selected by this repository.
@@ -46,7 +48,7 @@ TIMEOUT_KEY = re.compile(r"^[\"']?timeout-minutes[\"']?\s*:")
 PERSIST_CREDENTIALS_KEY = re.compile(r"^[\"']?persist-credentials[\"']?\s*:")
 JOB_HEADER = re.compile(r"[A-Za-z0-9_-]+:")
 PINNED_ACTION = re.compile(
-    r"(?P<name>actions/[A-Za-z0-9_.-]+)@(?P<sha>[0-9a-f]{40})"
+    r"(?P<name>actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)@(?P<sha>[0-9a-f]{40})"
 )
 PINNED_SERVICE_IMAGE = re.compile(r"image:\s*[^\s@]+@sha256:[0-9a-f]{64}")
 
