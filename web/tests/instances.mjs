@@ -42,7 +42,7 @@ try {
     try {
       const context = await browser.newContext({ locale: "zh-CN",  viewport: { width: 360, height: 740 } });
       const page = await context.newPage();
-      const errors = []; let invitation = null; let creates = 0; let activations = 0; let monitoringRequests = 0; let release;
+      const errors = []; let invitation = null; let creates = 0; let activations = 0; let cancellations = 0; let pairingReads = 0; let monitoringRequests = 0; let release;
       const boundedName = `\uFEFF${"x".repeat(31)}`;
       const expectedNames = ["未配对新名称", "\uFEFF未配对新名称\uFEFF", "未配对新名称", boundedName, "未配对新名称"];
       page.on("pageerror", error => errors.push(error.message));
@@ -86,11 +86,13 @@ try {
             return route.fulfill({ status: 204 });
           }
           invitation.status = "cancelled";
+          cancellations++;
+          if(cancellations===1) return route.fulfill({status:503,json:{code:"service_unavailable",retryable:true,message:"SECRET cancellation",request_id:"cancel-lost-123"}});
           return route.fulfill({ status: 204 });
         }
-        if (path.endsWith(`/pairing-requests/${pairId}`)) return route.fulfill({ json: {
+        if (path.endsWith(`/pairing-requests/${pairId}`)) { pairingReads++; return route.fulfill({ json: {
           request_id: pairId, os: "linux", arch: "x86_64", client_version: "0.8.1", status: activations ? "active" : "waiting", expires_at: "2099-01-01T00:00:00Z",
-        } });
+        } }); }
         if (path.endsWith("/activate-admin")) {
           assert.deepEqual(request.postDataJSON(), { request_id: pairId, activation_code: code });
           activations++; invitation.status = "active";
@@ -161,6 +163,12 @@ try {
       await expect(page.getByRole("dialog", { name: "新建 客户端 实例" })).toHaveCount(0);
       await page.getByRole("button", { name: "取消配对", exact: true }).click();
       await page.getByRole("button", { name: "确认", exact: true }).click();
+      const cancelDialog = page.getByRole("dialog",{name:"取消配对",exact:true});
+      await expect(cancelDialog.getByRole("alert")).toContainText("cancel-lost-123");
+      await expect(cancelDialog).toContainText("重试不会永久删除");
+      await expect(page.locator("body")).not.toContainText("SECRET cancellation");
+      await cancelDialog.getByRole("button",{name:"确认",exact:true}).click();
+      assert.equal(cancellations,2);
       await expect(page.getByRole("cell", { name: "已取消", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "删除", exact: true }).click();
       await expect(page.getByRole("button", { name: "取消", exact: true })).toBeVisible();
@@ -174,8 +182,11 @@ try {
       await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/activate/${pairId}`);
       await expect(page.getByRole("dialog", { name: "激活 客户端 配对" })).toBeVisible();
       await expect(page.getByLabel("配对请求标识")).toHaveValue(pairId);
+      await expect(page.getByLabel("配对请求标识")).toBeFocused();
       await page.getByRole("button", { name: "读取配对请求" }).click();
       await expect(page.getByRole("region", { name: "待核对设备" })).toContainText("linux / x86_64");
+      await page.getByRole("button",{name:"刷新配对状态",exact:true}).click();
+      await expect.poll(()=>pairingReads).toBe(2);
       await page.getByLabel("密码", { exact: true }).fill(code);
       await page.getByRole("button", { name: "确认设备并激活" }).click();
       await expect(page.getByRole("dialog")).toHaveCount(0);

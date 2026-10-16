@@ -1,6 +1,5 @@
 import { rangeEditor, checkDateRangeValidation } from "./date-range.mjs";
 import { checkWebLanguage } from "./language.mjs";
-import "./pagination-contract.mjs";
 import { checkHeaderActions, checkHeaderLogout } from "./header-actions.mjs";
 import { paintedSurfaceColor } from "./painted-surface.mjs";
 import assert from "node:assert/strict";
@@ -74,20 +73,7 @@ function latestReport(hostId = host(50).id, collectedAt = "2026-09-04T00:00:00Z"
       { id: "luid_00000000_00013789", vendor: "amd", name: "AMD Radeon(TM) Vega 8 Graphics", utilization_percent: null, memory_total_bytes: 1010 * 1024 * 1024, memory_used_bytes: null, temperature_celsius: null, power_watts: null, core_clock_mhz: null, memory_clock_mhz: null, pcie_rx_bytes_per_second: null, pcie_tx_bytes_per_second: null, source: "windows-dxgi-pdh" }] },
     capabilities: [{ name: "system.cpu", available: true, source: "sysinfo", error_kind: null, message: null }], client: { spool_pending_batches: 0, collector_errors: 0 } };
 }
-globalThis.location ??= { href: "http://127.0.0.1/" };
-const { isHostDetailResponse } = await import("../src/api.ts");
-const currentDetail = { host: host(50), latest: latestReport() };
-assert.equal(isHostDetailResponse(currentDetail), true);
-assert.equal(isHostDetailResponse({ ...currentDetail, latest: { ...currentDetail.latest, schema_version: 3 } }), false);
-for (const key of ["inventory_collected_at", "memory_modules", "devices"]) {
-  const missing = structuredClone(currentDetail);
-  delete missing.latest.system.hardware[key];
-  assert.equal(isHostDetailResponse(missing), false);
-}
-const invalidDevices = structuredClone(currentDetail);
-invalidDevices.latest.system.hardware.devices = null;
-assert.equal(isHostDetailResponse(invalidDevices), false);
-
+// Strict response guards and pagination vectors run against Rust in Cargo tests.
 const server = await preview({ preview: { host: "127.0.0.1", port: 0, strictPort: true } });
 const address = server.httpServer.address();
 assert.ok(address && typeof address === "object");
@@ -115,6 +101,7 @@ try {
       let reboundId = null, releaseReboundDetail = null, releaseFirstDetail = null, futureSample = false;
       let delayNextReports = false, releaseReports = null;
       let failInstanceRefresh = false;
+      let failDetailRefresh = false;
       const selectedHost = () => reboundId ? { ...host(50), id: reboundId, name: "Rebound Host", last_seen_at: "2026-09-04T00:10:00Z" } : host(50);
       page.on("pageerror", error => errors.push(error.message));
       await page.route("**/api/v1/**", async route => {
@@ -178,6 +165,7 @@ try {
               bucket("2026-09-03T23:01:00Z", 20, null), bucket("2026-09-03T23:59:00Z", 30, 40),
             ] };
         } else if (detailMatch) {
+          if (failDetailRefresh) return route.fulfill({status:503,json:{code:"service_unavailable",retryable:true,message:"SECRET telemetry",request_id:"telemetry-failed-123"}});
           detailRequests++; detailActive++; maximumDetailActive = Math.max(maximumDetailActive, detailActive);
           if (detailRequests === 1) await new Promise(resolve => { releaseFirstDetail = resolve; });
           if (reboundId && detailMatch[1] === reboundId && releaseReboundDetail === null) await new Promise(resolve => { releaseReboundDetail = resolve; });
@@ -192,7 +180,10 @@ try {
         }
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
       });
+      const wasmReady = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(".wasm") && response.status() === 200);
       await page.goto(`http://127.0.0.1:${address.port}`);
+      await wasmReady;
+      await expect(page.locator("html")).toHaveAttribute("data-xcss-runtime", "leptos", { timeout: 30_000 });
       await page.getByRole("link", { name: "选择实例 Host-0", exact: true }).waitFor();
       const instanceNameStyle = await page.getByRole("link", { name: "选择实例 Host-0", exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, parentColor: getComputedStyle(element.parentElement).color, decoration: getComputedStyle(element).textDecorationLine }));
       assert.equal(instanceNameStyle.color, instanceNameStyle.parentColor);
@@ -495,6 +486,20 @@ try {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await page.setViewportSize({ width: 360, height: 740 });
       await deviceNavigation.getByRole("button", { name: "监控状态" }).click();
+      // Failed automatic reads retain the last successful receipt time even
+      // when the selected category is changed and its view is mounted again.
+      failDetailRefresh = true;
+      await expect(page.getByRole("alert")).toContainText("telemetry-failed-123");
+      const updatedValue = () => monitoringSection.getByText("页面最近更新",{exact:true}).locator("xpath=following-sibling::dd[1]");
+      const lastSuccessfulUpdate = await updatedValue().innerText();
+      await page.waitForTimeout(1_100);
+      await deviceNavigation.getByRole("button",{name:"CPU",exact:true}).click();
+      await expect(page.getByRole("alert")).toContainText("上次成功数据");
+      await deviceNavigation.getByRole("button",{name:"监控状态",exact:true}).click();
+      await expect(updatedValue()).toHaveText(lastSuccessfulUpdate);
+      failDetailRefresh = false;
+      await page.getByRole("group",{name:"全局操作"}).getByRole("button",{name:"刷新",exact:true}).click();
+      await expect(page.getByRole("alert")).toHaveCount(0);
       const hiddenRequests = await page.evaluate(() => {
         Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
         document.dispatchEvent(new Event("visibilitychange"));

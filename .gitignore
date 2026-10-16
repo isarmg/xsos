@@ -19,3 +19,7 @@ __pycache__/
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+
+# Generated Leptos/WASM browser artifacts
+/web/pkg/
+/web/leptos/target/

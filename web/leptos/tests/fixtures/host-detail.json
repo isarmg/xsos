@@ -1,0 +1,313 @@
+{
+  "host": {
+    "id": "018f1f4b-7a5d-7b5f-8d31-000000000050",
+    "name": "Host-50",
+    "os": "linux",
+    "os_version": null,
+    "kernel_version": null,
+    "arch": "x86_64",
+    "client_version": "0.8.1",
+    "registered_at": "2026-09-04T00:00:00Z",
+    "last_seen_at": "2026-09-04T00:00:00Z",
+    "latest_collected_at": null,
+    "status": "online",
+    "data_error": null,
+    "capabilities": [],
+    "cpu_usage_percent": null,
+    "memory_usage_percent": 25,
+    "network_received_bytes_per_second": null,
+    "network_transmitted_bytes_per_second": null,
+    "disk_read_bytes_per_second": null,
+    "disk_written_bytes_per_second": null,
+    "max_temperature_celsius": null,
+    "gpu_utilization_percent": null,
+    "gpu_memory_usage_percent": null,
+    "cpu_frequency_mhz": null,
+    "gpu_power_watts": null,
+    "gpu_core_clock_mhz": null,
+    "max_fan_rpm": null,
+    "max_disk_temperature_celsius": null,
+    "max_disk_percentage_used": null
+  },
+  "latest": {
+    "schema_version": 1,
+    "report_id": "038f1f4b-7a5d-7b5f-8d31-000000000050",
+    "collected_at": "2026-09-04T00:00:00Z",
+    "host": {
+      "id": "018f1f4b-7a5d-7b5f-8d31-000000000050",
+      "os": "linux",
+      "os_version": null,
+      "kernel_version": null,
+      "arch": "x86_64",
+      "client_version": "0.8.1"
+    },
+    "interval_seconds": 5,
+    "system": {
+      "hardware": {
+        "inventory_collected_at": "2026-09-04T00:00:00Z",
+        "memory_modules": [
+          {
+            "id": "smbios:0001",
+            "locator": "DIMM A1",
+            "model": "M323R2GA3BB0",
+            "vendor": "Samsung",
+            "memory_type": "DDR5",
+            "module_version": "FW1.2",
+            "form_factor": "DIMM",
+            "capacity_bytes": 8589934592,
+            "speed_mt_s": 5600,
+            "configured_speed_mt_s": 4800,
+            "reported_speed": null,
+            "source": "linux-smbios"
+          }
+        ],
+        "devices": [
+          {
+            "id": "tb0",
+            "kind": "thunderbolt",
+            "name": "Intel Thunderbolt 4 NHI",
+            "vendor": "Intel",
+            "source": "linux-sysfs"
+          },
+          {
+            "id": "monitor0",
+            "kind": "monitor",
+            "name": "DELL U2723QE",
+            "model": "U2723QE",
+            "source": "linux-drm-edid"
+          },
+          {
+            "id": "bt0",
+            "kind": "bluetooth",
+            "name": "Intel AX211 Bluetooth",
+            "source": "linux-sysfs"
+          },
+          {
+            "id": "usb0",
+            "kind": "usb_controller",
+            "name": "Intel USB 3.2 Controller",
+            "vendor_id": "8086",
+            "product_id": "7a60",
+            "source": "linux-sysfs"
+          },
+          {
+            "id": "usb1",
+            "kind": "usb_device",
+            "name": "USB Audio DAC",
+            "speed_mbps": 480,
+            "source": "linux-sysfs"
+          },
+          {
+            "id": "audio0",
+            "kind": "audio",
+            "name": "Realtek ALC295",
+            "model": "ALC295",
+            "vendor": "Realtek",
+            "source": "linux-alsa"
+          }
+        ],
+        "collected_at": "2026-09-04T00:00:00Z",
+        "cpu": {
+          "model": "Modern CPU",
+          "frequency_mhz": 4200,
+          "per_core_frequency_mhz": [
+            4200,
+            null
+          ],
+          "load_average": [
+            0.1,
+            0.2,
+            0.3
+          ]
+        },
+        "networks": [
+          {
+            "name": "eth0",
+            "ip_addresses": [
+              "192.0.2.1/24"
+            ],
+            "link_speed_mbps": 2500
+          },
+          {
+            "name": "aux0",
+            "ip_addresses": [
+              "198.51.100.1/24"
+            ],
+            "link_speed_mbps": 1000
+          }
+        ],
+        "physical_networks": [
+          {
+            "id": "pci-0000:03:00.0",
+            "name": "Intel I225-V",
+            "interface_name": "eth0",
+            "mac_address": "02:00:00:00:00:01",
+            "link_speed_mbps": 2500,
+            "source": "linux-sysfs-net-device"
+          }
+        ],
+        "sensors": [
+          {
+            "id": "fan1",
+            "label": "CPU Fan",
+            "kind": "fan_rpm",
+            "value": 1200,
+            "source": "linux-hwmon"
+          }
+        ],
+        "disk_health": [
+          {
+            "device": "/dev/nvme0",
+            "model": "NVMe SSD",
+            "healthy": false,
+            "percentage_used": 105,
+            "media_errors": "9007199254740993",
+            "collected_at": "2026-09-04T00:00:00Z",
+            "source": "smartctl-json"
+          }
+        ]
+      },
+      "uptime_seconds": 90061,
+      "cpu": {
+        "usage_percent": 12.5,
+        "logical_count": 8,
+        "physical_count": 4,
+        "per_core_percent": [
+          10,
+          15
+        ]
+      },
+      "memory": {
+        "total_bytes": 17179869184,
+        "used_bytes": 8589934592,
+        "available_bytes": 8589934592,
+        "swap_total_bytes": 0,
+        "swap_used_bytes": 0
+      },
+      "networks": [
+        {
+          "name": "eth0",
+          "received_bytes_total": 1024,
+          "transmitted_bytes_total": 2048,
+          "received_bytes_per_second": 128,
+          "transmitted_bytes_per_second": 256,
+          "packets_received_total": 10,
+          "packets_transmitted_total": 20,
+          "receive_errors_total": 0,
+          "transmit_errors_total": 0
+        }
+      ],
+      "disks": [
+        {
+          "name": "nvme0n1",
+          "mount_point": "/",
+          "file_system": "ext4",
+          "total_bytes": 1000000000,
+          "available_bytes": 500000000,
+          "read_bytes_total": 4096,
+          "written_bytes_total": 8192,
+          "read_bytes_per_second": 512,
+          "written_bytes_per_second": 1024,
+          "is_read_only": false
+        },
+        {
+          "name": "large-disk",
+          "mount_point": "/large",
+          "file_system": "xfs",
+          "total_bytes": "18014398509481984",
+          "available_bytes": "9007199254740992",
+          "read_bytes_total": "18446744073709551615",
+          "written_bytes_total": 0,
+          "read_bytes_per_second": 0,
+          "written_bytes_per_second": 0,
+          "is_read_only": false
+        }
+      ],
+      "temperatures": [
+        {
+          "id": "cpu",
+          "label": "CPU Package",
+          "celsius": 48.5,
+          "max_celsius": 90,
+          "critical_celsius": 100,
+          "source": "sysfs"
+        }
+      ],
+      "gpus": [
+        {
+          "id": "gpu0",
+          "vendor": "NVIDIA",
+          "name": "RTX",
+          "utilization_percent": 35,
+          "memory_total_bytes": 8589934592,
+          "memory_used_bytes": 4294967296,
+          "temperature_celsius": 55,
+          "power_watts": 120,
+          "core_clock_mhz": 1500,
+          "memory_clock_mhz": 7000,
+          "pcie_rx_bytes_per_second": 256,
+          "pcie_tx_bytes_per_second": 128,
+          "source": "nvml"
+        },
+        {
+          "id": "luid_00000000_0000a1bb",
+          "vendor": "amd",
+          "name": "AMD Radeon(TM) Vega 8 Graphics",
+          "utilization_percent": 40.3,
+          "memory_total_bytes": 1059061760,
+          "memory_used_bytes": 681574400,
+          "temperature_celsius": null,
+          "power_watts": null,
+          "core_clock_mhz": null,
+          "memory_clock_mhz": null,
+          "pcie_rx_bytes_per_second": null,
+          "pcie_tx_bytes_per_second": null,
+          "source": "windows-dxgi-pdh"
+        },
+        {
+          "id": "adlx_00000300",
+          "vendor": "amd",
+          "name": "AMD Radeon(TM) Vega 8 Graphics",
+          "utilization_percent": null,
+          "memory_total_bytes": null,
+          "memory_used_bytes": null,
+          "temperature_celsius": 88,
+          "power_watts": null,
+          "core_clock_mhz": null,
+          "memory_clock_mhz": null,
+          "pcie_rx_bytes_per_second": null,
+          "pcie_tx_bytes_per_second": null,
+          "source": "amd-adlx-no-luid"
+        },
+        {
+          "id": "luid_00000000_00013789",
+          "vendor": "amd",
+          "name": "AMD Radeon(TM) Vega 8 Graphics",
+          "utilization_percent": null,
+          "memory_total_bytes": 1059061760,
+          "memory_used_bytes": null,
+          "temperature_celsius": null,
+          "power_watts": null,
+          "core_clock_mhz": null,
+          "memory_clock_mhz": null,
+          "pcie_rx_bytes_per_second": null,
+          "pcie_tx_bytes_per_second": null,
+          "source": "windows-dxgi-pdh"
+        }
+      ]
+    },
+    "capabilities": [
+      {
+        "name": "system.cpu",
+        "available": true,
+        "source": "sysinfo",
+        "error_kind": null,
+        "message": null
+      }
+    ],
+    "client": {
+      "spool_pending_batches": 0,
+      "collector_errors": 0
+    }
+  }
+}
