@@ -91,7 +91,9 @@ jobs:
           python3 -I -B scripts/test-installed-lifecycle-adapter.py
           python3 -I -B scripts/test-installed-candidate-workflow.py
       - name: Install exact Rust toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          cargo +1.99.0 install wasm-bindgen-cli --version 0.2.129 --locked
       - name: Enforce the Server target boundary
         shell: bash
         run: |
