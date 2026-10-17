@@ -6,7 +6,7 @@
 
 当前 `main` 已合并 xcss-web CSR 与 Rust 原生构建；直接在主分支构建和验收。下面的首次迁移流程与数字作为历史记录，正式发行和线上部署继续使用产品发布流程。
 
-`web/xcss-web/src` 是界面、状态和请求校验的实现；`web/src/main-xcss-web.js` 负责加载字体、CSS、角标绘制适配器和 WASM。旧 React 实现和原 JavaScript 单元测试只保存在 `web/tests/fixtures/react-baseline`，用于审查迁移差异，不参与生产构建或验收。
+`web/xcss-web/src` 是界面、状态和请求校验的实现；`web/src/main-xcss-web.js` 负责加载字体、CSS、角标绘制适配器和 WASM。退役的 React 对照源码、模拟测试和独立配置已从工作树移除，历史差异可通过 Git 查阅；当前 Rust 单元测试和真实 WASM 浏览器验收继续保留。
 
 ## 构建
 
@@ -32,7 +32,7 @@ python3 -I -B scripts/test-xcss-web-build.py
 npm run test:browser --prefix web
 ```
 
-浏览器验收使用 Chromium、Firefox，必须实际加载独立 `.wasm`，且 Rust 启动后出现 `data-xcss-runtime="xcss-web"`。覆盖实例生命周期、重复创建抑制、长期配对密码、未配对/已配对详情、主机重新绑定、硬件时间戳、历史图表、日期分页、陈旧数据保留、8 MiB 流式响应上限、5 秒读取超时和账户设置。旧 React 对照代码通过测试不能作为迁移验收依据。
+浏览器验收使用 Chromium、Firefox，必须实际加载独立 `.wasm`，且 Rust 启动后出现 `data-xcss-runtime="xcss-web"`。覆盖实例生命周期、重复创建抑制、长期配对密码、未配对/已配对详情、主机重新绑定、硬件时间戳、历史图表、日期分页、陈旧数据保留、8 MiB 流式响应上限、5 秒读取超时和账户设置。验收只针对当前实际运行的 Rust/WASM 实现。
 
 客户端和服务端发布、部署仍遵循原有流程；本次源码迁移不自动部署线上实例。
 
