@@ -4,11 +4,11 @@ product_id = "xsos"
 [foundation]
 platform_generation = 1
 version = "1.0.0"
-git_rev = "df7ff903ba4261597fe60bab35dc2b30cc80309d"
+git_rev = "6d285cd1ba4707ed2350123d7b50dfeacfb7a4ac"
 
 [[components]]
 id = "server"
 profile = "server-control-plane"
 http_adapter = "axum"
-web_profile = "web-react-admin"
+web_profile = "web-csr-admin"
 capabilities = ["embedded-web", "platform-sqlite", "admin-persistent", "server-runtime", "server-health"]
