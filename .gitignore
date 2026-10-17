@@ -20,8 +20,8 @@ web/node_modules/
 web/dist/
 web/*.tsbuildinfo
 
-# Generated Leptos/WASM browser artifacts
+# Generated xcss-web/WASM browser artifacts
 /web/pkg/
-/web/leptos/target/
+/web/xcss-web/target/
 
 /tools/web-build/target/

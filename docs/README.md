@@ -21,4 +21,4 @@ xsos 为管理员提供自托管 Web 管理台，服务端运行于 Linux AMD64 
 
 指标含义见[硬件监控](hardware-monitoring.md)，接口与数据细节见[参考](reference.md)。
 
-- [Leptos 界面维护说明](leptos-web.md)：Rust/WASM 构建、原界面对照、实际浏览器验收及 Axum 静态资源。
+- [xcss-web 界面维护说明](xcss-web.md)：Rust/WASM 构建、原界面对照、实际浏览器验收及 Axum 静态资源。

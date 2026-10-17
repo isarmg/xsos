@@ -183,7 +183,7 @@ try {
       const wasmReady = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(".wasm") && response.status() === 200);
       await page.goto(`http://127.0.0.1:${address.port}`);
       await wasmReady;
-      await expect(page.locator("html")).toHaveAttribute("data-xcss-runtime", "leptos", { timeout: 30_000 });
+      await expect(page.locator("html")).toHaveAttribute("data-xcss-runtime", "xcss-web", { timeout: 30_000 });
       await page.getByRole("link", { name: "选择实例 Host-0", exact: true }).waitFor();
       const instanceNameStyle = await page.getByRole("link", { name: "选择实例 Host-0", exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, parentColor: getComputedStyle(element.parentElement).color, decoration: getComputedStyle(element).textDecorationLine }));
       assert.equal(instanceNameStyle.color, instanceNameStyle.parentColor);
