@@ -85,11 +85,16 @@ try {
       const page = await context.newPage();
       await page.addInitScript(() => {
         window.hostPollingDispatches = { details: 0, history: 0 };
+        window.hostPollingDispatchLog = [];
         const originalFetch = window.fetch.bind(window);
         window.fetch = (input, options) => {
           const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-          if (/\/monitoring\/hosts\/[0-9a-f-]+$/.test(url.pathname)) window.hostPollingDispatches.details++;
-          if (/\/monitoring\/hosts\/[0-9a-f-]+\/history$/.test(url.pathname)) window.hostPollingDispatches.history++;
+          const resource = /\/monitoring\/hosts\/[0-9a-f-]+$/.test(url.pathname) ? "details"
+            : /\/monitoring\/hosts\/[0-9a-f-]+\/history$/.test(url.pathname) ? "history" : null;
+          if (resource) {
+            window.hostPollingDispatches[resource]++;
+            window.hostPollingDispatchLog.push({ resource, hidden: document.hidden, at: performance.now() });
+          }
           return originalFetch(input, options);
         };
       });
@@ -498,8 +503,10 @@ try {
       await deviceNavigation.getByRole("button",{name:"监控状态",exact:true}).click();
       await expect(updatedValue()).toHaveText(lastSuccessfulUpdate);
       failDetailRefresh = false;
-      await page.getByRole("group",{name:"全局操作"}).getByRole("button",{name:"刷新",exact:true}).click();
-      await expect(page.getByRole("alert")).toHaveCount(0);
+      // Do not enqueue a manual refresh before the automatic-polling check.
+      // Manual reads are intentionally allowed while hidden and serialize behind
+      // in-flight reads; the 2500ms history read can outlive the 250ms detail read.
+      // Recover the failed detail read in the explicit hidden-manual case below.
       const hiddenRequests = await page.evaluate(() => {
         Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
         document.dispatchEvent(new Event("visibilitychange"));
@@ -509,12 +516,13 @@ try {
       // Count client dispatches at the visibility boundary, rather than delayed
       // Playwright route callbacks for HTTP requests already sent while visible.
       assert.deepEqual(await page.evaluate(() => window.hostPollingDispatches), hiddenRequests,
-        "A hidden page must stop both detail and history polling");
+        `A hidden page must stop both detail and history polling; dispatch lifecycle: ${JSON.stringify(await page.evaluate(() => window.hostPollingDispatchLog))}`);
       const beforeManualRefresh = detailRequests;
       const beforeManualHistoryRefresh = historyRequests;
       await page.getByRole("group", { name: "全局操作" }).getByRole("button", { name: "刷新", exact: true }).click();
       await expect.poll(() => detailRequests).toBeGreaterThan(beforeManualRefresh);
       await expect.poll(() => historyRequests).toBeGreaterThan(beforeManualHistoryRefresh);
+      await expect(page.getByRole("alert")).toHaveCount(0);
       const beforeVisibleRefresh = { details: detailRequests, history: historyRequests };
       await page.evaluate(() => {
         delete document.hidden;
