@@ -135,15 +135,8 @@ jobs:
           cargo pkgid --locked -p xsos \
             | grep -F "#xsos@${server_version}"
           cargo pkgid --locked -p xsos-protocol | grep -F '#xsos-protocol@1.0.0'
-      - name: Install Node.js for embedded browser assets
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - name: Prepare embedded browser assets
         run: |
-          npm --prefix web ci
           cargo +1.99.0 run --quiet --locked --manifest-path tools/web-build/Cargo.toml -- server --product-root . --config xcss-web-build.json --mode development --web-only
       - name: Check Server and protocol
         run: >-
@@ -178,6 +171,8 @@ jobs:
       - name: Install frontend dependencies
         working-directory: web
         run: npm ci
+      - name: Verify Rust web and vendor contracts
+        run: npm run check:xcss --prefix web
       - name: Install pinned browser Rust tools
         run: |
           rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
