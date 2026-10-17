@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium, firefox, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { preview } from "vite";
+import { preview } from '../../tools/web-build/test-preview.mjs';
 
 const session = { authenticated: true, user_id: "A".repeat(43), username: "admin", role: "admin", csrf_token: "A".repeat(43) };
 const inviteId = "018f1f4b-7a5d-7b5f-8d31-123456789abc";

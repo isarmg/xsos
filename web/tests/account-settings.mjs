@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium, firefox, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { preview } from "vite";
+import { preview } from '../../tools/web-build/test-preview.mjs';
 import { paintedSurfaceColor } from "./painted-surface.mjs";
 
 const token = "A".repeat(43), originalPassword = "correct-password", newPassword = "new-correct-password";

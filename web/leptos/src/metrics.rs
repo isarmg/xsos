@@ -323,7 +323,59 @@ pub fn Snapshot(
     #[prop(default = true)] show_title: bool,
     #[prop(default = true)] framed: bool,
 ) -> impl IntoView {
-    view! {<article class=if framed{"host-device-card"}else{"host-device-card host-device-card--plain"}>{show_title.then(||view!{<h4>{title}</h4>})}<dl class="host-device-details">{record.as_object().cloned().unwrap_or_default().into_iter().map(|(k,v)|view!{<dt>{metric_label(&k)}</dt><dd>{format_value(&k,&v)}</dd>}).collect_view()}</dl></article>}
+    View::new(
+        leptos::html::article()
+            .child((
+                IntoRender::into_render({
+                    show_title.then(|| {
+                        View::new(leptos::html::h4().child(
+                            #[allow(unused_braces)]
+                            {
+                                IntoRender::into_render({ title })
+                            },
+                        ))
+                    })
+                }),
+                leptos::html::dl()
+                    .child(
+                        #[allow(unused_braces)]
+                        {
+                            IntoRender::into_render({
+                                record
+                                    .as_object()
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|(k, v)| {
+                                        View::new((
+                                            leptos::html::dt().child(
+                                                #[allow(unused_braces)]
+                                                {
+                                                    IntoRender::into_render({ metric_label(&k) })
+                                                },
+                                            ),
+                                            leptos::html::dd().child(
+                                                #[allow(unused_braces)]
+                                                {
+                                                    IntoRender::into_render({
+                                                        format_value(&k, &v)
+                                                    })
+                                                },
+                                            ),
+                                        ))
+                                    })
+                                    .collect_view()
+                            })
+                        },
+                    )
+                    .class("host-device-details"),
+            ))
+            .class(if framed {
+                "host-device-card"
+            } else {
+                "host-device-card host-device-card--plain"
+            }),
+    )
 }
 pub fn merge(a: &Value, b: &Value) -> Value {
     let mut out = a.as_object().cloned().unwrap_or_default();
