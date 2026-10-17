@@ -199,6 +199,9 @@ jobs:
       - name: Verify current frontend business and accessibility contracts
         working-directory: web
         run: npm run test:browser
+      - name: Verify startup failure visibility and explicit reload
+        working-directory: web
+        run: npm run test:startup
 
   installed_candidate:
     name: Installed release lifecycle
